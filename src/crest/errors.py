@@ -24,3 +24,7 @@ HIL_MASTER_FATAL = 3
 HIL_MASTER_FLASH_OVERFLOW = 4
 HIL_MASTER_RAM_OVERFLOW = 5
 HIL_MASTER_DEVICE_NOT_FOUND = 6
+
+# Measurement infrastructure failed after its bounded same-candidate recovery.
+HIL_ERROR_INTEGRITY = 7
+HIL_MASTER_INFRASTRUCTURE = 7

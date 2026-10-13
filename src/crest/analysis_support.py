@@ -130,21 +130,23 @@ def split_hil_request_hyperparams(
     return family_hparams, runtime_metadata
 
 
-def derive_latency_budget_ms(dataset_config: Any) -> float:
-    """Resolve the logical latency budget from dataset cadence fields.
+def derive_latency_budget_ms(dataset_config: Any, device_config: Any = None) -> float:
+    """Resolve the logical latency budget, including explicit device overrides.
 
     Parameters
     ----------
     dataset_config : Any
         ``config.dataset.params`` subtree. Explicit ``batch_period_ms`` takes
         precedence over the legacy ``stride / sampling_rate_hz`` derivation.
+    device_config : Any, optional
+        Device subtree; explicit latency budget overrides dataset cadence.
 
     Returns
     -------
     float
         Positive finite logical per-batch cadence in milliseconds.
     """
-    return resolve_batch_period_ms(dataset_config)
+    return resolve_batch_period_ms(dataset_config, device_config=device_config)
 
 
 def require_calibration_inputs(calibration_inputs: np.ndarray | None) -> np.ndarray:

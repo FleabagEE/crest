@@ -292,6 +292,8 @@ class HILServerTestCase(unittest.TestCase):
     def setUp(self) -> None:
         # Create a lightweight mock config object to avoid loading YAML files.
         """Prepare test fixtures."""
+        evidence_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(evidence_dir.cleanup)
         self.config = Dict(
             network=SimpleNamespace(host="127.0.0.1", port=6000, recv_timeout_sec=1, send_timeout_sec=1),
             training=Dict(
@@ -306,6 +308,7 @@ class HILServerTestCase(unittest.TestCase):
                 latency_budget_ms=None,
             ),
             outputs=SimpleNamespace(
+                models_dir=Path(evidence_dir.name),
                 tflite_model_path=Path("model.tflite"),
                 candidate_dir=Path("odom_tcn"),
                 checkpoint_path=Path("checkpoint.keras"),
@@ -1378,6 +1381,8 @@ class InitializationTests(HILServerTestCase):
                 self.request_runtime_metadata(),
             )
 
+        record_path = Path(result.pop("measurement_request_record"))
+        self.assertTrue(record_path.is_file())
         self.assertEqual(result, {"ok": True, "cpu_clock_mhz_requested": -1, "latency_budget_ms": 40.0})
         self.assertEqual(len(FakeModelFamily.materialize_calls), 1)
         fake_device.prepare_candidate.assert_called_once()
@@ -1934,3 +1939,20 @@ class SketchVariantTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EvidenceFailureTests(HILServerTestCase):
+    def test_request_archive_failure_preserves_candidate_exception_and_cleanup(self):
+        """Archive failure must preserve the candidate exception and release request resources."""
+        self.config.device.name = 'STM32_NUCLEO_N657X0_Q'
+        server = self.build_server()
+        device = MagicMock()
+        device.requires_candidate_model.return_value = False
+        device.prepare_candidate.return_value = Path('unused')
+        with patch('hil_server.get_microcontroller_device', return_value=device), \
+             patch('hil_server.resolve_device_options', return_value={}), \
+             patch('hil_server.collect_metrics', side_effect=ValueError('original candidate error')), \
+             patch('hil_server.Path.open', side_effect=OSError('disk full')):
+            with self.assertRaisesRegex(ValueError, 'original candidate error'):
+                server.determine_metrics(self.request_family_hparams(), self.request_runtime_metadata())
+        device.cleanup_prepared_candidate.assert_called_once_with(Path('unused'))

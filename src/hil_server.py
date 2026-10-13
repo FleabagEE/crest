@@ -8,6 +8,9 @@ and the lazy bootstrap path for dataset, task, and model-family components.
 """
 
 import argparse
+import json
+import uuid
+import sys
 from collections.abc import Mapping
 import logging
 import math
@@ -1165,6 +1168,9 @@ class HILServer:
             **filtered_device_options_overrides,
         }
         merged_device_options["latency_budget_ms"] = float(latency_budget_ms)
+        if self._normalized_device_name() == STM32_BOARD_NAME:
+            merged_device_options["measurement_records_dir"] = str(
+                (Path(getattr(self.config.outputs, "models_dir", "outputs")) / "hil_measurements").resolve())
         try:
             runtime_device = get_microcontroller_device(
                 self._normalized_device_name(),
@@ -1215,6 +1221,7 @@ class HILServer:
             )
         )
         prepared_dir: Path | None = None
+        metrics = {}
         try:
             prepared_dir = runtime_device.prepare_candidate(
                 request=self._build_candidate_prepare_request(
@@ -1281,7 +1288,31 @@ class HILServer:
                 energy_aware=effective_energy_aware,
             )
         finally:
-            runtime_device.cleanup_prepared_candidate(prepared_dir)
+            active_exception = sys.exc_info()[1]
+            try:
+                if self._normalized_device_name() == STM32_BOARD_NAME:
+                    # Persist request identity outside disposable candidate builds.
+                    records_dir = Path(getattr(self.config.outputs, "models_dir", "outputs")) / "hil_requests"
+                    records_dir.mkdir(parents=True, exist_ok=True)
+                    request_record = records_dir / f"{uuid.uuid4().hex}.json"
+                    metrics["measurement_request_record"] = str(request_record.resolve())
+                    active_exception = sys.exc_info()[1]
+                    with request_record.open("x") as handle:
+                        json.dump({"family_hparams": family_hparams,
+                                   "runtime_metadata": runtime_metadata,
+                                   "quantization_mode": resolved_quantization_mode,
+                                   "device_options": merged_device_options,
+                                   "prepared_dir": str(prepared_dir),
+                                   "exception": None if active_exception is None else str(active_exception),
+                                   "metrics": metrics}, handle, indent=2, default=str)
+            except OSError:
+                logger.exception("Failed to persist STM32 request evidence")
+                # Preserve any active candidate exception. A successful request
+                # must still fail closed if its required evidence cannot be saved.
+                if active_exception is None:
+                    raise
+            finally:
+                runtime_device.cleanup_prepared_candidate(prepared_dir)
 
         metrics["cpu_clock_mhz_requested"] = requested_cpu_clock_mhz
         if self.config.device.hil:

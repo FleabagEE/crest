@@ -29,12 +29,14 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 # The NASModelClient is the unit under test for this module.
-from nas_model_client import NASModelClient  # noqa: E402
+from nas_model_client import (NASModelClient, MeasurementInfrastructureError,
+                              MeasurementInfrastructureStop, _ConsecutiveMeasurementFailureGuard)  # noqa: E402
 from crest.hardware import (
     HIL_MASTER_DEVICE_NOT_FOUND,
     HIL_MASTER_FLASH_OVERFLOW,
     HIL_MASTER_RAM_OVERFLOW,
     HIL_MASTER_FATAL,
+    HIL_MASTER_INFRASTRUCTURE,
     HIL_MASTER_SUCCESS,
     TFLiteSubprocessError,
 )  # noqa: E402
@@ -621,6 +623,54 @@ class ObjectiveTests(unittest.TestCase):
     def tearDown(self) -> None:
         """Clean up test fixtures."""
         patch.stopall()
+
+    def test_objective_classifies_exhausted_measurement_recovery(self) -> None:
+        """Exhausted recovery must raise an infrastructure failure before training."""
+        self.client._hil_request = MagicMock(return_value={"error_code": HIL_MASTER_INFRASTRUCTURE})
+        with self.assertRaises(MeasurementInfrastructureError):
+            self.client.objective(DummyTrial())
+        logged = self.mock_log.call_args.kwargs
+        self.assertFalse(logged["pruned"])
+        self.assertEqual(logged["metrics"]["measurement_failure_class"], "infrastructure")
+        self.assertEqual(logged["prune_rule"], "measurement_integrity")
+        self.client.task.build_fit_plan.assert_not_called()
+
+    def test_multiobjective_infrastructure_failure_has_no_penalty_return(self) -> None:
+        """Multiobjective infrastructure failures must raise instead of returning penalties."""
+        self.client.config.nas.score = Dict(
+            type="multi-objective", metrics=Dict(), params=Dict(objectives=[
+                Dict(metric="rmse_total", direction="minimize"),
+                Dict(metric="latency_ms", direction="minimize")]))
+        self.client._hil_request = MagicMock(return_value={"error_code": HIL_MASTER_INFRASTRUCTURE})
+        with self.assertRaises(MeasurementInfrastructureError):
+            self.client.objective(DummyTrial())
+        self.assertFalse(self.mock_log.call_args.kwargs["pruned"])
+        self.assertEqual(self.mock_log.call_args.kwargs["prune_rule"], "measurement_integrity")
+        self.client.task.build_fit_plan.assert_not_called()
+
+    def test_infrastructure_csv_has_null_objectives_and_explicit_failure(self):
+        """Infrastructure CSV rows must identify FAIL and leave objective values null."""
+        import csv
+        import json
+        from crest.model import log_trial as real_log_trial
+        self.client.config.nas.score = Dict(
+            type="multi-objective", metrics=Dict(), params=Dict(objectives=[
+                Dict(metric="rmse_total", direction="minimize"),
+                Dict(metric="latency_ms", direction="minimize")]))
+        self.client._hil_request = MagicMock(return_value={"error_code": HIL_MASTER_INFRASTRUCTURE, "ram_bytes": 1024, "flash_bytes": 2048})
+        with self.assertRaises(MeasurementInfrastructureError):
+            self.client.objective(DummyTrial())
+        kwargs = self.mock_log.call_args.kwargs.copy()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "trials.csv"
+            kwargs["log_file_name"] = str(path)
+            real_log_trial(**kwargs)
+            with path.open() as stream:
+                row = next(csv.DictReader(stream))
+        self.assertEqual(row["trial_outcome"], "FAIL_infrastructure")
+        self.assertEqual(json.loads(row["objective_values_json"]), [None, None])
+        self.assertEqual(row["score"], "")
+        self.assertEqual(row["metric__measurement_failure_class"], "infrastructure")
 
     def test_objective_prunes_on_flash_overflow(self) -> None:
         """Flash overflow errors should prune the Optuna trial."""
@@ -1778,7 +1828,7 @@ class SmokeTestTests(unittest.TestCase):
                 """
                 self.metric_names_calls.append(list(metric_names))
 
-            def optimize(self, func, n_trials):
+            def optimize(self, func, n_trials, callbacks=None, catch=()):
                 """Run optimize.
 
                 Parameters
@@ -1844,7 +1894,7 @@ class SmokeTestTests(unittest.TestCase):
                 """
                 self.metric_names_calls.append(list(metric_names))
 
-            def optimize(self, func, n_trials):
+            def optimize(self, func, n_trials, callbacks=None, catch=()):
                 """Run optimize.
 
                 Parameters
@@ -1893,7 +1943,7 @@ class SmokeTestTests(unittest.TestCase):
                 """
                 self.metric_names_calls.append(list(metric_names))
 
-            def optimize(self, func, n_trials):
+            def optimize(self, func, n_trials, callbacks=None, catch=()):
                 """Run optimize.
 
                 Parameters
@@ -1957,7 +2007,7 @@ class SmokeTestTests(unittest.TestCase):
                 """
                 self.metric_names_calls.append(list(metric_names))
 
-            def optimize(self, func, n_trials):
+            def optimize(self, func, n_trials, callbacks=None, catch=()):
                 """Run optimize.
 
                 Parameters
@@ -2018,7 +2068,7 @@ class SmokeTestTests(unittest.TestCase):
                 self.optimize_calls = []
                 self.trials = []
 
-            def optimize(self, func, n_trials):
+            def optimize(self, func, n_trials, callbacks=None, catch=()):
                 """Run optimize.
 
                 Parameters
@@ -2062,7 +2112,132 @@ class SmokeTestTests(unittest.TestCase):
         self.assertEqual(cfg_path.read_text(encoding="utf-8"), "device:\n  name: TEST_DEVICE\n")
 
 
+class MeasurementFailureGuardTests(unittest.TestCase):
+    """Real Optuna lifecycle regressions; objectives never train or touch hardware."""
+
+    @staticmethod
+    def _fail(trial):
+        """Record infrastructure evidence and raise the failure consumed by Optuna."""
+        trial.set_user_attr("measurement_failure_class", "infrastructure")
+        trial.set_user_attr("measurement_record_path", f"/evidence/{trial.number}.json")
+        raise MeasurementInfrastructureError("bounded recovery exhausted")
+
+    def test_three_failures_stop_run_and_resume_preserves_budget(self):
+        """Three committed failures must stop proposals while resume preserves the trial budget."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            client = _build_test_client(root)
+            client.config.training.nas_trials = 4
+            client.config.training.max_total_trials = 4
+            client.objective = MagicMock(side_effect=self._fail)
+            storage = "sqlite:///" + str(root / "stop.db")
+            with self.assertRaises(MeasurementInfrastructureStop):
+                client.run_nas("stop", storage=storage)
+            study = optuna.load_study(study_name="stop", storage=storage)
+            self.assertEqual(client.objective.call_count, 3)
+            self.assertEqual([t.state for t in study.trials], [TrialState.FAIL] * 3)
+            self.assertEqual([t.user_attrs["measurement_record_path"] for t in study.trials],
+                             [f"/evidence/{i}.json" for i in range(3)])
+            # An explicit repaired invocation resets the streak, not the database/budget.
+            client.objective = MagicMock(return_value=1.0)
+            resumed = client.run_nas("stop", storage=storage)
+            self.assertEqual(client.objective.call_count, 1)
+            self.assertEqual([t.number for t in resumed.trials], [0, 1, 2, 3])
+            self.assertEqual([t.state for t in resumed.trials], [TrialState.FAIL] * 3 + [TrialState.COMPLETE])
+
+    def test_only_proven_measurement_success_resets_streak(self):
+        """Only valid measurement evidence may reset the infrastructure failure streak."""
+        study = optuna.create_study()
+        guard = _ConsecutiveMeasurementFailureGuard()
+        kwargs = dict(callbacks=[guard], catch=(MeasurementInfrastructureError,))
+        study.optimize(self._fail, n_trials=2, **kwargs)
+        def measured(trial):
+            """Represent a valid measurement rejected only for deadline infeasibility."""
+            trial.set_user_attr("measurement_instrumentation_valid", True)
+            raise optuna.TrialPruned("valid measurement, deadline infeasible")
+        study.optimize(measured, n_trials=1, **kwargs)
+        self.assertEqual(guard.streak, 0)
+        study.optimize(self._fail, n_trials=2, **kwargs)
+        study.optimize(lambda trial: 10000., n_trials=1, **kwargs)
+        def rejected(trial):
+            """Represent a pre-measurement rejection that cannot reset the streak."""
+            raise optuna.TrialPruned("pre-HIL compile rejection")
+        study.optimize(rejected, n_trials=1, **kwargs)
+        self.assertEqual(guard.streak, 2)
+        with self.assertRaises(MeasurementInfrastructureStop):
+            study.optimize(self._fail, n_trials=1, **kwargs)
+        self.assertEqual(study.trials[-1].state, TrialState.FAIL)
+
+    def test_each_transport_kind_commits_fail_and_advances_guard(self):
+        """Each recoverable transport failure must commit FAIL and advance the guard."""
+        study = optuna.create_study()
+        guard = _ConsecutiveMeasurementFailureGuard()
+        for kind in ("harness_ready_timeout", "harness_done_timeout", "runtime_io", "runtime_start_timeout"):
+            with self.subTest(kind=kind):
+                guard.streak = 0
+                def failed(trial):
+                    """Attach the transport category before producing an infrastructure failure."""
+                    trial.set_user_attr("backend_error_kind", kind)
+                    self._fail(trial)
+                study.optimize(failed, n_trials=1, callbacks=[guard], catch=(MeasurementInfrastructureError,))
+                self.assertEqual(study.trials[-1].state, TrialState.FAIL)
+                self.assertEqual(guard.streak, 1)
+
+    def test_smoke_stops_on_third_failure_and_restores_settings(self):
+        """Smoke runs must stop after three failures and restore configuration settings."""
+        with tempfile.TemporaryDirectory() as directory:
+            client = _build_test_client(Path(directory))
+            original = (client.config.device.hil, client.config.training.train,
+                        client.config.training.nas_epochs)
+            client.objective = MagicMock(side_effect=self._fail)
+            with self.assertRaises(MeasurementInfrastructureStop):
+                client.smoke_test(trials=5, train=True, hil=True, epochs=1, study_name="smoke_stop")
+            database = client._artifacts_dir() / "optuna_smoke_test.db"
+            study = optuna.load_study(study_name="smoke_stop", storage="sqlite:///" + str(database))
+            self.assertEqual(client.objective.call_count, 3)
+            self.assertEqual([t.state for t in study.trials], [TrialState.FAIL] * 3)
+            self.assertEqual(original, (client.config.device.hil, client.config.training.train,
+                                       client.config.training.nas_epochs))
+
+
 class RunNASTests(unittest.TestCase):
+    def test_real_nsga_infrastructure_failure_consumes_budget_and_continues(self):
+        """NSGA must count an infrastructure failure toward budget and continue afterward."""
+        with tempfile.TemporaryDirectory() as directory:
+            client = _build_test_client(Path(directory))
+            client.config.training.nas_trials = 2
+            client.config.training.max_total_trials = 2
+            client.config.training.nas_multiobjective_population_size = 2
+            client.config.nas.score = Dict(
+                type="multi-objective", metrics=Dict(), params=Dict(objectives=[
+                    Dict(metric="rmse_total", direction="minimize"),
+                    Dict(metric="latency_ms", direction="minimize")]))
+            def objective(trial):
+                """Fail the first proposal, then return valid NSGA objective values."""
+                if trial.number == 0:
+                    trial.set_user_attr("measurement_failure_class", "infrastructure")
+                    raise MeasurementInfrastructureError("recovery exhausted")
+                return 1.0, 2.0
+            client.objective = objective
+            study = client.run_nas("infra", storage="sqlite:///" + str(Path(directory) / "study.db"))
+            self.assertIsInstance(study.sampler, optuna.samplers.NSGAIISampler)
+            self.assertEqual([t.state for t in study.trials], [TrialState.FAIL, TrialState.COMPLETE])
+            self.assertIsNone(study.trials[0].values)
+            self.assertEqual(len(study.trials), 2)  # No replacement proposal beyond attempt cap.
+
+    def test_real_run_unrelated_exception_still_aborts(self):
+        """Unrelated objective exceptions must still abort NAS execution."""
+        with tempfile.TemporaryDirectory() as directory:
+            client = _build_test_client(Path(directory))
+            client.config.training.nas_trials = 2
+            client.config.training.max_total_trials = 2
+            client.objective = MagicMock(side_effect=ValueError("unrelated programming error"))
+            with self.assertRaisesRegex(ValueError, "unrelated programming error"):
+                client.run_nas("unrelated", storage="sqlite:///" + str(Path(directory) / "study.db"))
+            study = optuna.load_study(study_name="unrelated", storage="sqlite:///" + str(Path(directory) / "study.db"))
+            self.assertEqual(len(study.trials), 1)
+            self.assertEqual(study.trials[0].state, TrialState.FAIL)
+
     """Run_nas should continue until completed trials meet the target."""
 
     class DummyStudy:
@@ -2107,7 +2282,7 @@ class RunNASTests(unittest.TestCase):
             """
             self.user_attrs[key] = value
 
-        def optimize(self, func, n_trials):
+        def optimize(self, func, n_trials, callbacks=None, catch=()):
             """Run optimize.
 
             Parameters

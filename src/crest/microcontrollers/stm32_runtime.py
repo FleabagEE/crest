@@ -44,6 +44,8 @@ DUT_FLOAT_PATTERNS = {
     ),
     "wake_recovery_us": re.compile(rf"^wake recovery us:\s*{FLOAT_CAPTURE}$", re.IGNORECASE),
     "wake_overshoot_us": re.compile(rf"^wake overshoot us:\s*{FLOAT_CAPTURE}$", re.IGNORECASE),
+    "slept_slots": re.compile(rf"^slept slots:\s*{FLOAT_CAPTURE}$", re.IGNORECASE),
+    "stop_entries": re.compile(rf"^stop entries:\s*{FLOAT_CAPTURE}$", re.IGNORECASE),
     "rtc_sleep_total_ms": re.compile(rf"^rtc sleep total ms:\s*{FLOAT_CAPTURE}$", re.IGNORECASE),
     "deadline_miss_count": re.compile(
         rf"^cadence deadline misses:\s*{FLOAT_CAPTURE}$",
@@ -476,19 +478,23 @@ def _raise_failure_from_lines(lines: Sequence[str]) -> None:
         line = str(raw_line).strip()
         if line.startswith("STM32_AI_INIT=FAIL"):
             raise STM32RuntimeProtocolError(
-                kind="runtime_protocol",
+                kind="runtime_model",
                 detail=line,
                 serial_log=lines,
             )
+        if line == "STM32_AI_RUN=FAIL measurement_integrity:stop_sleep":
+            raise STM32RuntimeProtocolError(
+                kind="measurement_integrity", detail=line, serial_log=lines,
+            )
         if line.startswith("STM32_AI_RUN=FAIL"):
             raise STM32RuntimeProtocolError(
-                kind="runtime_protocol",
+                kind="runtime_model",
                 detail=line,
                 serial_log=lines,
             )
         if line == "STM32_AI_START=TIMEOUT":
             raise STM32RuntimeProtocolError(
-                kind="runtime_timeout",
+                kind="runtime_start_timeout",
                 detail=line,
                 serial_log=lines,
             )
@@ -568,8 +574,10 @@ def parse_stm32_runtime_lines(lines: Sequence[str]) -> STM32RuntimeTelemetry:
         "timer_per_window_s": float(floats.get("timer_per_window_s", -1.0)),
         "wake_recovery_us": float(floats.get("wake_recovery_us", -1.0)),
         "wake_overshoot_us": float(floats.get("wake_overshoot_us", -1.0)),
+        "slept_slots": float(floats.get("slept_slots", -1.0)),
+        "stop_entries": float(floats.get("stop_entries", -1.0)),
         "rtc_sleep_total_ms": float(floats.get("rtc_sleep_total_ms", -1.0)),
-        "deadline_miss_count": int(float(floats.get("deadline_miss_count", -1.0))),
+        "deadline_miss_count": float(floats.get("deadline_miss_count", -1.0)),
         "rtc_clock_hz_nominal": float(floats.get("rtc_clock_hz_nominal", -1.0)),
         "phase": phase,
         "rtc_clock_source": strings.get("rtc_clock_source"),
@@ -628,7 +636,7 @@ def execute_runtime_session(
     )
     if init_line is None:
         raise STM32RuntimeProtocolError(
-            kind="runtime_timeout",
+            kind="runtime_start_timeout",
             detail="Timed out waiting for STM32_AI_INIT result.",
             serial_log=monitor.snapshot_lines(),
         )
@@ -642,7 +650,7 @@ def execute_runtime_session(
     )
     if ready_line is None:
         raise STM32RuntimeProtocolError(
-            kind="runtime_timeout",
+            kind="runtime_start_timeout",
             detail="Timed out waiting for DUT READY.",
             serial_log=monitor.snapshot_lines(),
         )
@@ -656,6 +664,8 @@ def execute_runtime_session(
         start_index=cursor,
     )
     if run_line is None:
+        # START was sent: a slow/hung measured run remains a candidate timeout.
+        # Missing terminal telemetry alone cannot distinguish a later transport loss.
         raise STM32RuntimeProtocolError(
             kind="runtime_timeout",
             detail="Timed out waiting for STM32_AI_RUN result.",

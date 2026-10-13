@@ -2960,6 +2960,17 @@ class HILControllerTests(unittest.TestCase):
             (-1, -1, -1.0, -1, HIL_MASTER_ARENA_EXHAUSTED, None),
         )
 
+    def test_hil_controller_integrity_failure_is_infrastructure_without_arena_retry(self):
+        """An integrity failure must stop arena search and retain infrastructure evidence."""
+        from crest.errors import HIL_ERROR_INTEGRITY, HIL_MASTER_INFRASTRUCTURE
+        device = self._controller_device(np.array([-1]), name="STM32_NUCLEO_N657X0_Q")
+        evidence = {"measurement_record_paths": ["first.json", "second.json"]}
+        with patch("crest.hardware.HIL_spec", return_value=(50000, 100000, -1.0, -1024, HIL_ERROR_INTEGRITY, evidence)) as spec:
+            result = HIL_controller(dirpath="unused", chosen_device="STM32_NUCLEO_N657X0_Q", run_hil=True, device=device)
+        self.assertEqual(spec.call_count, 1)
+        self.assertEqual(result[4], HIL_MASTER_INFRASTRUCTURE)
+        self.assertEqual(result[5], evidence)
+
     def test_hil_controller_single_shot_stm_timeout_is_fatal(self):
         # Single-shot STM32 timeouts should be treated as fatal because there is no arena-search retry path to recover them.
         # runtime failure instead of being rewritten as arena exhaustion.

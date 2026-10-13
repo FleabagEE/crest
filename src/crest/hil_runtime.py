@@ -654,6 +654,10 @@ def collect_metrics(request: CollectMetricsRequest) -> dict:
     }
     set_error_code(metrics, error_code)
     apply_cadenced_metric_defaults(metrics, power_metrics)
+    # Preserve STM32 acceptance provenance through the generic metric normalizer.
+    for key, value in (power_metrics or {}).items():
+        if key.startswith("measurement_"):
+            metrics[key] = value
     if backend_error_kind is not None:
         metrics["backend_error_kind"] = str(backend_error_kind)
     if backend_error_detail is not None:

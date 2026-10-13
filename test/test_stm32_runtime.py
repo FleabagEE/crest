@@ -198,7 +198,7 @@ class STM32RuntimeParserTests(unittest.TestCase):
                 ]
             )
 
-        self.assertEqual(context.exception.kind, "runtime_protocol")
+        self.assertEqual(context.exception.kind, "runtime_model")
 
     def test_parse_runtime_lines_requires_latency_token(self) -> None:
         # Back-to-back runtime parsing should require the latency token before returning success.
@@ -237,6 +237,8 @@ class STM32RuntimeParserTests(unittest.TestCase):
             "wake recovery us: 1200",
             "wake overshoot us: 35",
             "rtc sleep total ms: 1500.000",
+            "slept slots: 9",
+            "stop entries: 9",
             "cadence deadline misses: 0",
             "inference seq output: 1",
             "STM32_AI_RUN=OK",
@@ -251,6 +253,8 @@ class STM32RuntimeParserTests(unittest.TestCase):
         self.assertEqual(telemetry.power_metrics["stop_mode_variant"], "system_stop_mainreg_wfi")
         self.assertAlmostEqual(telemetry.power_metrics["rtc_sleep_total_ms"], 1500.0)
         self.assertEqual(telemetry.power_metrics["deadline_miss_count"], 0)
+        self.assertEqual(telemetry.power_metrics["slept_slots"], 9)
+        self.assertEqual(telemetry.power_metrics["stop_entries"], 9)
 
 
 class SerialMonitorTests(unittest.TestCase):
@@ -327,7 +331,7 @@ class STM32RuntimeSessionTests(unittest.TestCase):
                 run_timeout_s=0.1,
             )
 
-        self.assertEqual(context.exception.kind, "runtime_timeout")
+        self.assertEqual(context.exception.kind, "runtime_start_timeout")
 
 
 if __name__ == "__main__":

@@ -73,6 +73,7 @@ VALID_OBJECTIVE_DIRECTIONS = {"maximize", "minimize"}
 VALID_PRUNE_CONDITIONS = {"gt", "gte", "lt", "lte"}
 FEASIBILITY_EQUALITY_EPSILON = 1e-12
 NONNEGATIVE_METRICS = {
+    "measurement_deployment_eligible",
     "ram_bytes",
     "flash_bytes",
     "max_ram_bytes",
@@ -102,6 +103,7 @@ NONNEGATIVE_METRICS = {
     "cadenced_deadline_miss_count",
 }
 INFRASTRUCTURE_SCORE_METRICS = {
+    "measurement_deployment_eligible",
     "ram_bytes",
     "flash_bytes",
     "max_ram_bytes",
@@ -208,6 +210,7 @@ TRIAL_LOG_STABLE_COLUMNS = (
     "score_type",
     "objective_names_json",
     "objective_values_json",
+    "trial_outcome",
     "objective_directions_json",
     "artifact_summary_json",
     "pruned",
@@ -323,8 +326,8 @@ class TrialOutcome:
         runs.
     objective_names : list[str]
         Ordered objective labels.
-    objective_values : list[float]
-        Ordered objective values.
+    objective_values : list[float | None]
+        Ordered objective values; null entries mark failed infrastructure attempts.
     objective_directions : list[str]
         Ordered objective directions matching Optuna conventions.
     task_metrics : dict[str, Any]
@@ -343,8 +346,8 @@ class TrialOutcome:
         runs.
     objective_names : list[str]
         Ordered objective labels.
-    objective_values : list[float]
-        Ordered objective values.
+    objective_values : list[float | None]
+        Ordered objective values; null entries mark failed infrastructure attempts.
     objective_directions : list[str]
         Ordered objective directions matching Optuna conventions.
     task_metrics : dict[str, Any]
@@ -359,7 +362,7 @@ class TrialOutcome:
 
     score: float | None
     objective_names: list[str]
-    objective_values: list[float]
+    objective_values: list[float | None]
     objective_directions: list[str]
     task_metrics: dict[str, Any]
     hyperparams: dict[str, Any]
@@ -2745,7 +2748,7 @@ def _trial_log_row_mapping(
     dict[str, Any]
         Flat row mapping keyed by CSV column name.
     """
-    score_type = "multi-objective" if trial_outcome.score is None else "scoring-function"
+    score_type = metrics.get("score_type", "multi-objective" if trial_outcome.score is None else "scoring-function")
     mapping: dict[str, Any] = {
         "study_name": study_name,
         "timestamp_unix": time.time(),
@@ -2784,6 +2787,7 @@ def _trial_log_row_mapping(
         "score_type": score_type,
         "objective_names_json": json.dumps(trial_outcome.objective_names),
         "objective_values_json": json.dumps(trial_outcome.objective_values),
+        "trial_outcome": metrics.get("trial_outcome", ""),
         "objective_directions_json": json.dumps(trial_outcome.objective_directions),
         "artifact_summary_json": json.dumps(trial_outcome.artifact_summary, sort_keys=True),
         "pruned": pruned,
@@ -2905,6 +2909,34 @@ def _write_trial_log_append(log_path: Path, header: list[str], row: dict[str, An
         writer.writerow({column: _serialize_csv_cell(row.get(column)) for column in header})
 
 
+def _record_measurement_evidence(metrics: dict[str, Any], trial: TrialLike) -> dict[str, Any]:
+    """Preserve raw-record links and acceptance reasons in trial attrs and CSV.
+
+    Parameters
+    ----------
+    metrics : dict[str, Any]
+        Metrics whose measurement-prefixed entries contain acceptance evidence.
+    trial : TrialLike
+        Trial receiving JSON-safe measurement user attributes.
+
+    Returns
+    -------
+    dict[str, Any]
+        CSV cells keyed by metric-prefixed column names, with lists and mappings
+        serialized as JSON strings.
+    """
+    columns = {}
+    for name, value in metrics.items():
+        if name.startswith("measurement_"):
+            normalized = _normalize_json_safe(value)
+            trial.set_user_attr(name, normalized)
+            columns[f"metric__{name}"] = (
+                json.dumps(normalized, sort_keys=True)
+                if isinstance(normalized, (dict, list)) else normalized
+            )
+    return columns
+
+
 def log_trial(
     trial_outcome: TrialOutcome,
     metrics: dict,
@@ -2956,6 +2988,7 @@ def log_trial(
         prune_reason=prune_reason,
         prune_rule=prune_rule,
     )
+    row_mapping.update(_record_measurement_evidence(metrics, trial))
     metric_columns = sorted(
         column_name
         for column_name in row_mapping
@@ -3055,8 +3088,10 @@ def log_trial(
     trial.set_user_attr("error_code", metrics["error_code"])
     trial.set_user_attr(
         "score_type",
-        "multi-objective" if trial_outcome.score is None else "scoring-function",
+        metrics.get("score_type", "multi-objective" if trial_outcome.score is None else "scoring-function"),
     )
+    if metrics.get("trial_outcome"):
+        trial.set_user_attr("trial_outcome", metrics["trial_outcome"])
     trial.set_user_attr("objective_names", list(trial_outcome.objective_names))
     trial.set_user_attr("objective_values", list(trial_outcome.objective_values))
     trial.set_user_attr("objective_directions", list(trial_outcome.objective_directions))
