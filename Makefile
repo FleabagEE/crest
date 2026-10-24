@@ -1,11 +1,15 @@
 # Copyright (c) 2026 UCLA Networked & Embedded Systems Laboratory
 # SPDX-License-Identifier: BSD-3-Clause
-.PHONY: help install test integration-test test-all start-gpu start-hil smoke env-create arduino-setup stm32-setup prepare-dataset prepare-audio-dataset clean
+.PHONY: help install test integration-test test-all start-gpu start-hil smoke env-create arduino-setup stm32-setup prepare-dataset prepare-audio-dataset rp2040-export rp2040-compile rp2040-bench rp2040-upload-stress clean
 
 PYTHON ?= python
 ENV ?= crest
 OXIOD_ZIP ?= OxIOD.zip
 URBANSOUND8K_ARGS ?=
+PORT ?= /dev/ttyACM0
+RP2040_CANDIDATE ?= models/rp2040_bench/dscnn_us8k_min_int8
+RP2040_BENCH_ARGS ?=
+RP2040_STRESS_ARGS ?=
 PYTHON_LIB_DIR := $(shell $(PYTHON) -c 'import sys; print(sys.prefix + "/lib")')
 TEST_ENV := LD_LIBRARY_PATH="$(PYTHON_LIB_DIR):$(LD_LIBRARY_PATH)"
 
@@ -23,6 +27,10 @@ help:
 	@echo "  stm32-setup    Validate STM32CubeCLT paths and bootstrap STM32CubeN6 firmware"
 	@echo "  prepare-dataset  Prepare OxIOD dataset (override OXIOD_ZIP=/path/to/OxIOD.zip)"
 	@echo "  prepare-audio-dataset  Prepare UrbanSound8K log-mel cache (use URBANSOUND8K_ARGS=\"--fold-rotation\" for Phase 9 reports)"
+	@echo "  rp2040-export  Export the smallest int8 DS-CNN as an RP2040 candidate (RP2040_CANDIDATE=...)"
+	@echo "  rp2040-compile Compile-only RP2040 memory check (no board needed)"
+	@echo "  rp2040-bench   Upload + time the RP2040 candidate (PORT=/dev/ttyACM0, RP2040_BENCH_ARGS=...)"
+	@echo "  rp2040-upload-stress  Upload the RP2040 candidate 10 times and log each attempt (RP2040_STRESS_ARGS=...)"
 	@echo "  clean          Remove Python cache/build artifacts"
 
 install:
@@ -60,6 +68,18 @@ prepare-dataset:
 
 prepare-audio-dataset:
 	$(PYTHON) data/dataset_download_and_splits/urbansound8k/prepare_urbansound8k.py $(URBANSOUND8K_ARGS)
+
+rp2040-export:
+	$(PYTHON) analysis_scripts/rp2040_latency_bench/export_smallest_dscnn.py --output-dir $(RP2040_CANDIDATE)
+
+rp2040-compile:
+	$(PYTHON) analysis_scripts/rp2040_latency_bench/run_rp2040_latency_bench.py --candidate-dir $(RP2040_CANDIDATE) --compile-only $(RP2040_BENCH_ARGS)
+
+rp2040-bench:
+	$(PYTHON) analysis_scripts/rp2040_latency_bench/run_rp2040_latency_bench.py --candidate-dir $(RP2040_CANDIDATE) --port $(PORT) $(RP2040_BENCH_ARGS)
+
+rp2040-upload-stress:
+	$(PYTHON) analysis_scripts/rp2040_latency_bench/rp2040_upload_stress.py --candidate-dir $(RP2040_CANDIDATE) --port $(PORT) $(RP2040_STRESS_ARGS)
 
 clean:
 	rm -rf build dist *.egg-info

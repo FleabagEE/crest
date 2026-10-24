@@ -154,6 +154,11 @@ Per-backend nested blocks include:
 
 - `device.portenta.*`
 - `device.stm32.*`
+- `device.rp2040.*` (Nano RP2040 Connect, latency/memory only):
+  `arena_sizes_kb` (ascending arena sweep in KiB), `warmup_runs` (default 5),
+  `upload_timeout_s` (default 90), `upload_retries` (default 2), and
+  `port_wait_s` (default 10). See
+  [`nas_config_audio_rp2040.yaml`](nas_config_audio_rp2040.yaml).
 
 STM32 option plumbing is resolved by
 [`../crest/microcontrollers/__init__.py`](../crest/microcontrollers/__init__.py).

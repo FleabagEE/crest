@@ -52,6 +52,7 @@ the CREST HIL harness and INA228 telemetry path.
 - [STM32 Bring-Up Guide](#stm32-bring-up-guide)
 - [New-Vendor Bring-Up Guide](#new-vendor-bring-up-guide)
 - [Runtime Measurement Notes](#runtime-measurement-notes)
+- [Nano RP2040 Connect](#nano-rp2040-connect)
 - [Test Plan](#test-plan)
 - [Contributor Checklist](#contributor-checklist)
 - [Definition Of Done](#definition-of-done)
@@ -80,6 +81,8 @@ Current examples:
 
 1. [`arduino_ble33.py`](arduino_ble33.py)
 2. [`arduino_portenta_h7.py`](arduino_portenta_h7.py)
+3. [`arduino_nano_rp2040.py`](arduino_nano_rp2040.py)
+   (latency/memory only; see [Nano RP2040 Connect](#nano-rp2040-connect))
 
 ### STM32 Cube Backend
 
@@ -666,6 +669,80 @@ Practical implication:
    `HIL_ERROR_LATENCY` rather than `HIL_ERROR_UNDER_SIZED`.
 2. Deterministic CM4 runtime-fault classification would require a separate
    fault channel and is out of scope for the current backend.
+
+## Nano RP2040 Connect
+
+`ARDUINO_NANO_RP2040_CONNECT` (FQBN `arduino:mbed_nano:nanorp2040connect`)
+uses the same `arduino:mbed_nano` core and `ArduinoDevice` flow as BLE33, but
+it only measures **latency and memory**. There is no harness or INA228 path:
+`supports_energy_measurement()` returns `False`, and config validation
+rejects `training.energy_aware: true`, `device.runtime_mode: cadenced` and
+`device.harness_serial_port` for this board.
+
+What is different from BLE33:
+
+1. Sketch: candidates are staged with
+   [`../../../sketches/crest_inference_latency.ino`](../../../sketches/crest_inference_latency.ino)
+   whatever `training.energy_aware` says. It runs `device.rp2040.warmup_runs`
+   untimed `Invoke()` calls, times each of `device.measured_inference_runs`
+   calls with `micros()` (nothing is printed inside the timed window), and
+   then prints one line per run:
+   `board=nano_rp2040_connect model=<dir> run=<k> invoke_us=<int> preprocess_us=-1 arena_used_bytes=<int> status=ok`.
+   It then prints the usual `runs:` / power-placeholder / `timer output:`
+   lines, so `arduino_base` parses it unchanged. `timer output` is the mean of
+   the timed runs (warm-up excluded, unlike the BLE33 sketch).
+   `preprocess_us` is `-1` because log-mel features are computed on the host.
+2. Failures: `AllocateTensors()` runs after `START`, so TFLM's
+   `Failed to allocate ... missing: N` message reaches the host and maps to
+   `HIL_ERROR_UNDER_SIZED` as before. The sketch also prints
+   `status=infeasible reason=<reason>` and never prints `timer output:`.
+   Flash/RAM overflow is detected at compile time (`HIL_ERROR_*_OVERFLOW`).
+3. Arena sweep: set per target with `device.rp2040.arena_sizes_kb`
+   (default `[10, 25, 40, 70, 95, 120, 140, 160, 180, 200]`, capped below
+   the 225 000-byte RAM limit).
+4. Upload: each `arduino-cli upload` attempt has a timeout
+   (`device.rp2040.upload_timeout_s`). Failed attempts are retried
+   (`upload_retries`) after an explicit 1200-bps touch, and the backend waits
+   up to `port_wait_s` for `/dev/ttyACM*` to come back.
+
+### Build, Upload, Run
+
+Example config:
+[`../../config/nas_config_audio_rp2040.yaml`](../../config/nas_config_audio_rp2040.yaml)
+(pinned to the smallest DS-CNN).
+
+```bash
+make arduino-setup                  # installs arduino:mbed_nano, same core as BLE33
+make rp2040-export                  # smallest int8 DS-CNN -> models/rp2040_bench/...
+make rp2040-compile                 # compile-only memory check, no board needed
+make rp2040-bench PORT=/dev/ttyACM0 # upload + 5 warm-up + 100 timed runs -> results file
+make rp2040-upload-stress PORT=/dev/ttyACM0
+make start-hil                      # NAS: run with --config src/config/nas_config_audio_rp2040.yaml
+```
+
+See
+[`../../../analysis_scripts/rp2040_latency_bench/README.md`](../../../analysis_scripts/rp2040_latency_bench/README.md)
+for script options and the results-file format.
+
+### Known Bootloader Issue
+
+Every upload goes through the RP2040 ROM USB bootloader. The 1200-bps touch
+resets the board, and it re-enumerates with a different USB ID
+(`2e8a:0003`, "RP2 Boot") before `rp2040load` flashes it; afterwards it comes
+back as `2341:005e` with a new `/dev/ttyACM*` node.
+
+1. Linux needs the mbed core's udev rules for `2e8a:0003`. Otherwise
+   `rp2040load` cannot open the device and waits forever.
+2. Under WSL2 the bootloader device is a new USB device. It has to be
+   attached with `usbipd` (`--auto-attach`) too, or the upload hangs at the
+   same point.
+3. If the touch does not reach the board (for example a sketch that crashed
+   with USB down), force the ROM bootloader by hand. The Nano RP2040 Connect
+   has no BOOTSEL button: jumper the `REC` pin to `GND`, press reset, remove
+   the jumper, then retry the upload.
+
+The backend's timeout and retry loop turn a hang into `HIL_ERROR_UPLOAD`
+instead of blocking NAS. It cannot fix a missing udev rule or USB attachment.
 
 ## Test Plan
 

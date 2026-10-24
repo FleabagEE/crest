@@ -66,6 +66,7 @@ BOARD_QUANTIZATION_CAPABILITIES = {
     "STM32_NUCLEO_N657X0_Q": {"float", "int8_ptq"},
     "PORTENTA_H7": {"float", "int8_ptq"},
     "ARDUINO_NANO_33_BLE_SENSE": {"float", "int8_ptq"},
+    "ARDUINO_NANO_RP2040_CONNECT": {"float", "int8_ptq"},
 }
 VALID_DERIVED_METRIC_TYPES = {"add", "energy-budget-from-power"}
 VALID_TERM_TYPES = {"weighted", "normalized-weighted", "boundary", "target"}
@@ -2450,6 +2451,19 @@ def load_config(
             "Cadenced runtime for Portenta H7 and Arduino Nano 33 BLE Sense only supports "
             "training.input_mode='uniform'."
         )
+
+    if normalized_device_name == "ARDUINO_NANO_RP2040_CONNECT":
+        # This target is latency/memory-only: no harness, INA228 or cadenced pass.
+        if device.runtime_mode == "cadenced":
+            raise ValueError("ARDUINO_NANO_RP2040_CONNECT only supports device.runtime_mode='back_to_back'.")
+        if bool(training.get("energy_aware", False)):
+            raise ValueError(
+                "ARDUINO_NANO_RP2040_CONNECT is latency/memory-only; set training.energy_aware: false."
+            )
+        if device.get("harness_serial_port", None) not in (None, ""):
+            raise ValueError(
+                "ARDUINO_NANO_RP2040_CONNECT has no measurement harness; remove device.harness_serial_port."
+            )
 
     measured_inference_runs_raw = device.get("measured_inference_runs", 10)
     if isinstance(measured_inference_runs_raw, bool):

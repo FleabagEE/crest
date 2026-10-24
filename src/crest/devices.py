@@ -722,7 +722,8 @@ _LEGACY_DEVICE_SPECS = {
         "arena_sizes": np.array([10, 25, 40, 70, 95, 120, 140, 150, 160, 180, 200, 210, 220]),
         "max_ram": 225_000,
         "max_flash": 15_000_000,
-        "fqbn": "arduino:mbed_nano:nano_rp2040_connect",
+        # Superseded by the registered arduino_nano_rp2040 backend spec.
+        "fqbn": "arduino:mbed_nano:nanorp2040connect",
     },
 }
 
@@ -959,7 +960,18 @@ def _sync_arduino_sketch_variant_for_config(
     energy_aware = bool(_cfg_get(training_cfg, "energy_aware", False))
     input_mode = str(_cfg_get(training_cfg, "input_mode", "uniform")).strip().lower()
     header_name: str | None = None
-    if normalized_runtime_phase == "cadenced":
+    if normalized_device_name == "ARDUINO_NANO_RP2040_CONNECT":
+        # Latency/memory-only target: always stage the per-run latency sketch,
+        # whatever training.energy_aware says (config validation rejects it).
+        if normalized_runtime_phase == "cadenced":
+            raise ValueError("ARDUINO_NANO_RP2040_CONNECT does not support the cadenced runtime phase.")
+        if input_mode != "uniform":
+            raise ValueError(
+                "ARDUINO_NANO_RP2040_CONNECT only supports training.input_mode='uniform'."
+            )
+        variant_dir = sketch_variants_dir
+        variant_name = "crest_inference_latency.ino"
+    elif normalized_runtime_phase == "cadenced":
         if input_mode != "uniform":
             raise ValueError(
                 "Arduino cadenced runtime only supports training.input_mode='uniform'."

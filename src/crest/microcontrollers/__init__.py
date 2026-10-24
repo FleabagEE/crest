@@ -28,6 +28,11 @@ def _registry_entries() -> dict[str, tuple[str, str, str]]:
             "ArduinoBLE33Device",
             "BOARD_DEFAULT_SPEC",
         ),
+        "ARDUINO_NANO_RP2040_CONNECT": (
+            "crest.microcontrollers.arduino_nano_rp2040",
+            "ArduinoNanoRP2040Device",
+            "BOARD_DEFAULT_SPEC",
+        ),
         "PORTENTA_H7": (
             "crest.microcontrollers.arduino_portenta_h7",
             "ArduinoPortentaH7Device",
@@ -227,6 +232,25 @@ def resolve_device_options(
             options["latency_budget_ms"] = shared_latency_budget_ms
         return options or None
 
+    if normalized_name == "ARDUINO_NANO_RP2040_CONNECT":
+        from .arduino_nano_rp2040 import RP2040_OPTION_KEYS, resolve_rp2040_options
+
+        rp2040_cfg = _cfg_get(device_config, "rp2040", None)
+        # RP2040 keeps its latency-only knobs under `device.rp2040`; validate
+        # them here so config errors surface before any board is touched.
+        options = {}
+        if rp2040_cfg is not None:
+            for key in RP2040_OPTION_KEYS:
+                value = _cfg_get(rp2040_cfg, key, None)
+                if value not in (None, ""):
+                    options[key] = list(value) if key == "arena_sizes_kb" else value
+        resolve_rp2040_options(options)
+        if shared_runtime_mode not in (None, ""):
+            options["runtime_mode"] = shared_runtime_mode
+        if shared_latency_budget_ms not in (None, ""):
+            options["latency_budget_ms"] = shared_latency_budget_ms
+        return options or None
+
     if normalized_name == "STM32_NUCLEO_N657X0_Q":
         from .stm32_nucleo_n657x0 import resolve_stm32_nucleo_n657x0_q_options
 
@@ -315,6 +339,11 @@ def __getattr__(name: str) -> Any:
             "crest.microcontrollers.arduino_ble33",
             "ArduinoBLE33Device",
         )
+    if name == "ArduinoNanoRP2040Device":
+        return _load_symbol(
+            "crest.microcontrollers.arduino_nano_rp2040",
+            "ArduinoNanoRP2040Device",
+        )
     if name == "ArduinoPortentaH7Device":
         return _load_symbol(
             "crest.microcontrollers.arduino_portenta_h7",
@@ -330,6 +359,7 @@ def __getattr__(name: str) -> Any:
 
 __all__ = [
     "ArduinoBLE33Device",
+    "ArduinoNanoRP2040Device",
     "ArduinoPortentaH7Device",
     "STM32NucleoN657X0QDevice",
     "get_device",

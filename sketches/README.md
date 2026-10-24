@@ -28,6 +28,9 @@ For config semantics, see
   `training.input_mode: uniform` and `training.energy_aware: false`.
 - [`crest_inference_energy_cadenced.ino`](crest_inference_energy_cadenced.ino)
   Shared Arduino cadenced-pass sketch.
+- [`crest_inference_latency.ino`](crest_inference_latency.ino)
+  Latency/memory-only sketch with warm-up and per-run `key=value` telemetry.
+  Always used for `ARDUINO_NANO_RP2040_CONNECT`; never drives harness GPIO.
 - [`analysis_sketches/`](analysis_sketches)
   Analysis-oriented sketch variants and data headers for non-uniform input
   modes.
@@ -50,6 +53,8 @@ uses this layout:
 1. Uniform input mode:
    - [`crest_inference_energy.ino`](crest_inference_energy.ino)
    - [`crest_inference_no_energy.ino`](crest_inference_no_energy.ino)
+   - [`crest_inference_latency.ino`](crest_inference_latency.ino)
+     (`ARDUINO_NANO_RP2040_CONNECT` only, regardless of `energy_aware`)
 2. Cadenced second pass:
    - [`crest_inference_energy_cadenced.ino`](crest_inference_energy_cadenced.ino)
 3. Analysis input modes:

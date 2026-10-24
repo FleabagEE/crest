@@ -30,6 +30,12 @@ workload and uses the CREST HIL harness.
     Synthetic phase-energy probe for CREST-compatible MCU targets, reusing the
     existing HIL harness and INA228 telemetry path.
 
+- `rp2040_latency_bench/`
+  - **Hardware requirement: Arduino Nano RP2040 Connect required** (export
+    and compile-only steps need no board). Latency/memory-only bench for the
+    RP2040 backend: smallest DS-CNN export, per-run timing results, and an
+    upload-robustness loop.
+
 - `paper_plots/`
   - **Hardware requirement: no hardware required.** Publication figure
     generators plus sidecar plotted-point and summary outputs from explicit

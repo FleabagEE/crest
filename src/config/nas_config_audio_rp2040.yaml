@@ -1,0 +1,132 @@
+# Copyright (c) 2026 UCLA Networked & Embedded Systems Laboratory
+# SPDX-License-Identifier: BSD-3-Clause
+# Arduino Nano RP2040 Connect UrbanSound8K DS-CNN latency/memory example.
+#
+# Latency- and memory-only: no harness, no INA228, no energy objective.
+# model.search is pinned to the smallest DS-CNN in the audio_dscnn search
+# space so the first bring-up run uses the cheapest candidate. Remove the
+# pins (or set `search: {}`) to search the full space.
+
+device:
+  name: ARDUINO_NANO_RP2040_CONNECT
+  hil: true
+  compile_when_hil_disabled: auto
+  runtime_mode: back_to_back
+  latency_budget_ms: 2000.0
+  serial_port: "/dev/ttyACM0"
+  # Timed runs per measurement; warm-up runs are set under device.rp2040.
+  measured_inference_runs: 100
+  dut_ready_timeout_s: 12.0
+  # Cortex-M0+ has no FPU/DSP, so 100 runs can take tens of seconds. A
+  # timeout is classified like an undersized arena, so keep this generous.
+  serial_timeout_s: 120.0
+  rp2040:
+    arena_sizes_kb: [10, 25, 40, 70, 95, 120, 140, 160, 180, 200]
+    warmup_runs: 5
+    upload_timeout_s: 90.0
+    upload_retries: 2
+    port_wait_s: 10.0
+
+dataset:
+  name: urbansound8k_mel
+  params:
+    cache_dir: "data/urbansound8k/cache/v2_logmel_16k_2s_64mels_25ms_10ms_folds"
+    fold_rotation_cache_dir: "data/urbansound8k/cache/v2_logmel_16k_2s_64mels_25ms_10ms_folds/fold_rotation"
+    batch_period_ms: 2000
+
+task:
+  name: sound_classification
+  params:
+    early_stopping_patience: 20
+    evaluation:
+      protocol: fixed_split
+      fold_rotation:
+        test_folds: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+
+model:
+  family: audio_dscnn
+  params:
+    export_variant: untrained
+  search:
+    base_channels: [4]
+    num_blocks: [2]
+    kernel_time: [3]
+    kernel_freq: [3]
+    stride_schedule: ["aggressive"]
+    channel_growth: [1.0]
+    max_channels: [64]
+    depth_multiplier: [1]
+    pointwise_scale: [0.75]
+    dropout_rate: [0.0]
+    norm_flag: [true]
+    dense_units: [0]
+    global_pool_type: ["avg"]
+    activation: ["relu"]
+
+training:
+  nas_epochs: 55
+  model_epochs: 990
+  nas_trials: 200
+  nas_multiobjective_population_size: 50
+  max_total_trials: 300
+  quantization:
+    mode: int8_ptq
+    search: false
+    choices: [int8_ptq]
+  latency_proxy_max_flops: 30000000.0
+  train: true
+  energy_aware: false
+  input_mode: "uniform"
+
+nas:
+  score:
+    type: multi-objective
+    params:
+      objectives:
+        - metric: macro_f1
+          direction: maximize
+        - metric: latency_ms
+          direction: minimize
+        - metric: ram_bytes
+          direction: minimize
+  prune:
+    rules: []
+  feasibility:
+    train_if_infeasible: false
+    rules:
+      - rule: latency_budget
+        metric: latency_ms
+        condition: gt
+        reference:
+          type: metric
+          metric: latency_budget_ms
+        reason: "Latency exceeds the 2 s audio decision cadence"
+      - rule: ram_capacity
+        metric: ram_bytes
+        condition: gt
+        reference:
+          type: metric
+          metric: max_ram_bytes
+        reason: "RAM usage exceeds target capacity"
+      - rule: flash_capacity
+        metric: flash_bytes
+        condition: gt
+        reference:
+          type: metric
+          metric: max_flash_bytes
+        reason: "Flash usage exceeds target capacity"
+
+outputs:
+  models_dir: "models"
+  candidate_dir: "audio_dscnn"
+  artifact_stem: "CREST_UrbanSound8K_RP2040"
+  log_file_name: "log_NAS_CREST_UrbanSound8K_RP2040.csv"
+
+network:
+  host: "127.0.0.1"
+  port: 6001
+  recv_timeout_sec: 720
+  send_timeout_sec: 720
+
+logging:
+  level: "INFO"
