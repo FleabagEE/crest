@@ -728,11 +728,11 @@ for script options and the results-file format.
 
 Every upload goes through the RP2040 ROM USB bootloader. The 1200-bps touch
 resets the board, and it re-enumerates with a different USB ID
-(`2e8a:0003`, "RP2 Boot") before `rp2040load` flashes it; afterwards it comes
+(`2e8a:0003`, "RP2 Boot") before `picotool` flashes it; afterwards it comes
 back as `2341:005e` with a new `/dev/ttyACM*` node.
 
 1. Linux needs the mbed core's udev rules for `2e8a:0003`. Otherwise
-   `rp2040load` cannot open the device and waits forever.
+   `picotool` cannot open the device and waits forever.
 2. Under WSL2 the bootloader device is a new USB device. It has to be
    attached with `usbipd` (`--auto-attach`) too, or the upload hangs at the
    same point.

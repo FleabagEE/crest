@@ -345,7 +345,7 @@ def run_upload_once(
         Application-mode CDC port.
     timeout_s : float
         Wall-clock limit. On expiry the whole process group (arduino-cli and
-        the ``rp2040load`` child it spawns) is killed.
+        the ``picotool`` child it spawns) is killed.
     fqbn : str, optional
         Board FQBN.
 

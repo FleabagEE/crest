@@ -249,7 +249,7 @@ class RP2040UploadTests(unittest.TestCase):
         ) as touch_mock, patch.object(arduino_nano_rp2040, "wait_for_serial_port", return_value=True), patch.object(
             arduino_nano_rp2040.time, "sleep"
         ):
-            result = device.upload(sketch_path=Path("/tmp/x"), build_dir=Path("/tmp/b"), serial_port=None)
+            result = device.upload(sketch_path=Path("cand"), build_dir=Path("build"), serial_port=None)
         self.assertTrue(result.success)
         self.assertEqual(upload_mock.call_count, 2)
         touch_mock.assert_called_once_with("/dev/ttyACM9")
@@ -266,7 +266,7 @@ class RP2040UploadTests(unittest.TestCase):
         ) as upload_mock, patch.object(arduino_nano_rp2040, "touch_1200bps", return_value=False), patch.object(
             arduino_nano_rp2040, "wait_for_serial_port", return_value=False
         ), patch.object(arduino_nano_rp2040.time, "sleep"):
-            result = device.upload(sketch_path=Path("/tmp/x"), build_dir=Path("/tmp/b"), serial_port=None)
+            result = device.upload(sketch_path=Path("cand"), build_dir=Path("build"), serial_port=None)
         self.assertFalse(result.success)
         self.assertEqual(upload_mock.call_count, 2)
 
