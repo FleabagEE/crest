@@ -75,6 +75,7 @@ tools/bin/
 tools/stm32/
 tools/arduino-user/libraries/Adafruit_BusIO/
 tools/arduino-user/libraries/Adafruit_INA228_Library/
+tools/arduino-user/libraries/Arduino_SE05X/
 
 .arduino-build/
 
