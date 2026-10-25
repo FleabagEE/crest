@@ -35,6 +35,28 @@ same core as the Nano 33 BLE Sense).
   `results/upload_stress_<mode>_<timestamp>.tsv` with one row per attempt.
   `--mode plain` runs bare `arduino-cli upload` with no retries;
   `--mode robust` adds the backend's 1200-bps touch and retries.
+- [`stage_tflite_candidate.py`](stage_tflite_candidate.py)
+  Stages existing `.tflite` files (for example the course-project subnets at
+  `<subnet>/exports/<1s|2s>/int8.tflite`) as candidates under
+  `models/rp2040_bench/<subnet>_<duration>_<variant>/`. When the subnet's
+  `run.json` is present, `candidate.json` also records width, block channels,
+  parameter count and int8 validation accuracy/macro-F1.
+- [`analyze_tflite_memory.py`](analyze_tflite_memory.py)
+  Per-layer MACs, peak live activations, and a predicted TFLM arena and
+  static RAM, computed before flashing. The arena estimate is peak activations
+  + CMSIS-NN conv scratch + 8 B per conv output channel + 2 KiB. On the
+  Nano RP2040 Connect it was 0.5-3.5% above the measured `arena_used_bytes`.
+- [`run_rp2040_bench_plan.py`](run_rp2040_bench_plan.py)
+  Runs several candidates in order. Each gets a short probe (10 runs), then a
+  full run sized to `--budget-s` (default 120 s, at least 30 and at most 100
+  timed runs), with serial timeouts derived from the measured latency. The
+  arena grows in 5 KiB steps on `arena_too_small`. `--skip-done` resumes an
+  interrupted plan.
+- [`summarize_rp2040_results.py`](summarize_rp2040_results.py)
+  Writes `results/rp2040_summary.csv`, one row per (model, board): width,
+  window, MACs, params, flash, static RAM, `arena_used_bytes`, median/p95,
+  runs, MAC/s, stride fit, validation accuracy/macro-F1, core version and
+  clock.
 
 ## Make Targets
 
@@ -45,6 +67,19 @@ make rp2040-bench PORT=/dev/ttyACM0
 make rp2040-upload-stress PORT=/dev/ttyACM0                               # plain
 make rp2040-upload-stress PORT=/dev/ttyACM0 RP2040_STRESS_ARGS="--mode robust"
 ```
+
+Benchmarking external models end to end:
+
+```bash
+python analysis_scripts/rp2040_latency_bench/stage_tflite_candidate.py <run>/subnets/*/exports/{1s,2s}/int8.tflite
+python analysis_scripts/rp2040_latency_bench/analyze_tflite_memory.py models/rp2040_bench/DSCNN_64_SC_*_int8
+python analysis_scripts/rp2040_latency_bench/run_rp2040_bench_plan.py --skip-done models/rp2040_bench/DSCNN_64_SC_*_int8
+python analysis_scripts/rp2040_latency_bench/summarize_rp2040_results.py
+```
+
+On a WSL host with limited memory, set `ARDUINO_CLI_BIN` to a wrapper that
+adds `--jobs 4` to `arduino-cli compile`. Unrestricted parallel mbed + TFLM
+builds crashed a 9 GB WSL VM twice.
 
 `RP2040_BENCH_ARGS` passes extra flags, for example
 `RP2040_BENCH_ARGS="--runs 200 --warmup 10 --arena-kb 40"`.

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import statistics
 import sys
 import time
@@ -106,6 +107,45 @@ def infeasible_line(model_id: str, reason: str, arena_bytes: int) -> str:
         f"board={BOARD_ID} model={model_id} run=0 invoke_us=-1 preprocess_us=-1 "
         f"arena_used_bytes=-1 status=infeasible reason={reason} arena_bytes={arena_bytes}"
     )
+
+
+_SUMMARY_FIELD_RE = re.compile(r"\b(\w+)=([-\w.]+)")
+
+
+def parse_results_file(path: Path) -> Dict[str, Any]:
+    """Parse a results file written by :func:`write_results`.
+
+    Parameters
+    ----------
+    path : Path
+        Results file.
+
+    Returns
+    -------
+    dict[str, Any]
+        ``model``, ``timed_runs``, ``warmup_runs``, the ``# summary:`` fields
+        (``status``, ``reason``, ``arena_kb``, ``arena_used_bytes``,
+        ``flash_bytes``, ``ram_bytes``, ``n``, ``median_invoke_us``,
+        ``p95_invoke_us``, ...; numbers converted) and ``invoke_us``, the
+        per-run samples from the raw ``status=ok`` lines.
+    """
+    text = path.read_text(encoding="utf-8")
+    parsed: Dict[str, Any] = {"path": str(path)}
+    header = re.search(r"^# board: (\S+)\s+model: (\S+)", text, re.MULTILINE)
+    if header:
+        parsed["board"], parsed["model"] = header.group(1), header.group(2)
+    runs = re.search(r"^# timed_runs: (\d+)\s+warmup_runs: (\d+)", text, re.MULTILINE)
+    if runs:
+        parsed["timed_runs"], parsed["warmup_runs"] = int(runs.group(1)), int(runs.group(2))
+    summary = text.split("# summary:", 1)[1].split("# raw", 1)[0] if "# summary:" in text else ""
+    for key, value in _SUMMARY_FIELD_RE.findall(summary):
+        try:
+            parsed[key] = float(value) if "." in value else int(value)
+        except ValueError:
+            parsed[key] = None if value == "None" else value
+    records = [record for record in parse_run_lines(text.splitlines()) if record.get("status") == "ok"]
+    parsed["invoke_us"] = [int(record["invoke_us"]) for record in records]
+    return parsed
 
 
 def run_attempt(
