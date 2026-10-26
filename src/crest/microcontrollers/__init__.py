@@ -33,6 +33,11 @@ def _registry_entries() -> dict[str, tuple[str, str, str]]:
             "ArduinoNanoRP2040Device",
             "BOARD_DEFAULT_SPEC",
         ),
+        "RASPBERRY_PI_4": (
+            "crest.microcontrollers.raspberry_pi4",
+            "RaspberryPi4Device",
+            "BOARD_DEFAULT_SPEC",
+        ),
         "PORTENTA_H7": (
             "crest.microcontrollers.arduino_portenta_h7",
             "ArduinoPortentaH7Device",
@@ -251,6 +256,24 @@ def resolve_device_options(
             options["latency_budget_ms"] = shared_latency_budget_ms
         return options or None
 
+    if normalized_name == "RASPBERRY_PI_4":
+        from .raspberry_pi4 import RPI4_OPTION_KEYS, resolve_rpi4_options
+
+        rpi4_cfg = _cfg_get(device_config, "rpi4", None)
+        # The Pi backend keeps its SSH/runtime knobs under `device.rpi4`.
+        options = {}
+        if rpi4_cfg is not None:
+            for key in RPI4_OPTION_KEYS:
+                value = _cfg_get(rpi4_cfg, key, None)
+                if value not in (None, ""):
+                    options[key] = value
+        resolve_rpi4_options(options)
+        if shared_runtime_mode not in (None, ""):
+            options["runtime_mode"] = shared_runtime_mode
+        if shared_latency_budget_ms not in (None, ""):
+            options["latency_budget_ms"] = shared_latency_budget_ms
+        return options or None
+
     if normalized_name == "STM32_NUCLEO_N657X0_Q":
         from .stm32_nucleo_n657x0 import resolve_stm32_nucleo_n657x0_q_options
 
@@ -349,6 +372,11 @@ def __getattr__(name: str) -> Any:
             "crest.microcontrollers.arduino_portenta_h7",
             "ArduinoPortentaH7Device",
         )
+    if name == "RaspberryPi4Device":
+        return _load_symbol(
+            "crest.microcontrollers.raspberry_pi4",
+            "RaspberryPi4Device",
+        )
     if name == "STM32NucleoN657X0QDevice":
         return _load_symbol(
             "crest.microcontrollers.stm32_nucleo_n657x0",
@@ -361,6 +389,7 @@ __all__ = [
     "ArduinoBLE33Device",
     "ArduinoNanoRP2040Device",
     "ArduinoPortentaH7Device",
+    "RaspberryPi4Device",
     "STM32NucleoN657X0QDevice",
     "get_device",
     "list_device_specs",

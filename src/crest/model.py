@@ -67,6 +67,7 @@ BOARD_QUANTIZATION_CAPABILITIES = {
     "PORTENTA_H7": {"float", "int8_ptq"},
     "ARDUINO_NANO_33_BLE_SENSE": {"float", "int8_ptq"},
     "ARDUINO_NANO_RP2040_CONNECT": {"float", "int8_ptq"},
+    "RASPBERRY_PI_4": {"float", "int8_ptq"},
 }
 VALID_DERIVED_METRIC_TYPES = {"add", "energy-budget-from-power"}
 VALID_TERM_TYPES = {"weighted", "normalized-weighted", "boundary", "target"}
@@ -2451,6 +2452,17 @@ def load_config(
             "Cadenced runtime for Portenta H7 and Arduino Nano 33 BLE Sense only supports "
             "training.input_mode='uniform'."
         )
+
+    if normalized_device_name == "RASPBERRY_PI_4":
+        # LiteRT-over-SSH target: latency/memory only, no harness or cadenced pass.
+        if device.runtime_mode == "cadenced":
+            raise ValueError("RASPBERRY_PI_4 only supports device.runtime_mode='back_to_back'.")
+        if bool(training.get("energy_aware", False)):
+            raise ValueError("RASPBERRY_PI_4 is latency/memory-only; set training.energy_aware: false.")
+        if device.get("harness_serial_port", None) not in (None, ""):
+            raise ValueError("RASPBERRY_PI_4 has no measurement harness; remove device.harness_serial_port.")
+        if bool(device.get("hil", False)) and not _cfg_get(device.get("rpi4", None), "host", None):
+            raise ValueError("RASPBERRY_PI_4 with device.hil: true requires device.rpi4.host.")
 
     if normalized_device_name == "ARDUINO_NANO_RP2040_CONNECT":
         # This target is latency/memory-only: no harness, INA228 or cadenced pass.

@@ -53,6 +53,7 @@ the CREST HIL harness and INA228 telemetry path.
 - [New-Vendor Bring-Up Guide](#new-vendor-bring-up-guide)
 - [Runtime Measurement Notes](#runtime-measurement-notes)
 - [Nano RP2040 Connect](#nano-rp2040-connect)
+- [Raspberry Pi 4](#raspberry-pi-4)
 - [Test Plan](#test-plan)
 - [Contributor Checklist](#contributor-checklist)
 - [Definition Of Done](#definition-of-done)
@@ -743,6 +744,49 @@ back as `2341:005e` with a new `/dev/ttyACM*` node.
 
 The backend's timeout and retry loop turn a hang into `HIL_ERROR_UPLOAD`
 instead of blocking NAS. It cannot fix a missing udev rule or USB attachment.
+
+## Raspberry Pi 4
+
+`RASPBERRY_PI_4` ([`raspberry_pi4.py`](raspberry_pi4.py)) is a new-vendor
+backend. It implements `DeviceInterface` directly and runs LiteRT on the Pi
+over SSH, measuring **latency and memory** only.
+
+1. `prepare_candidate` exports `g_model.tflite` (float or full-int8) on the
+   CREST host. There is no C array and no sketch.
+2. `compile` builds nothing; `flash_bytes` is the `.tflite` size.
+3. `upload` runs `ssh mkdir -p <remote_dir>/<candidate>`, then `scp` copies
+   the model and
+   [`../../../sketches/rpi4/crest_litert_runner.py`](../../../sketches/rpi4/crest_litert_runner.py).
+4. `measure` runs the runner over `ssh`. It does `warmup_runs` untimed and
+   `measured_inference_runs` timed `invoke()` calls, prints the RP2040-format
+   per-run lines and `timer output:`, and reports `peak_rss_delta_bytes`
+   (`VmHWM` window from model load to the last run), which becomes
+   `ram_bytes`.
+5. The arena sweep is the single-shot `[-1]` sentinel and
+   `requires_arena_validation()` is `False`, as for STM32.
+   `supports_energy_measurement()` is `False`. Config validation rejects
+   `energy_aware: true`, cadenced mode, a harness port, and `hil: true`
+   without `device.rpi4.host`.
+
+Config lives under `device.rpi4.*` (`host`, `user`, `ssh_port`, `remote_dir`,
+`python`, `num_threads`, `xnnpack`, `warmup_runs`, `ssh_connect_timeout_s`,
+`upload_timeout_s`). See
+[`../../config/nas_config_audio_rpi4.yaml`](../../config/nas_config_audio_rpi4.yaml).
+
+Requirements on the Pi:
+
+1. Key-based SSH login from the CREST host. `BatchMode=yes` is used, and
+   the host key must already be in `known_hosts`.
+2. A Python with a LiteRT runtime at `device.rpi4.python`. The runner tries
+   `ai_edge_litert`, then `tflite_runtime`, then `tensorflow.lite`.
+   `tflite_runtime` has no wheel for Python 3.13 (Raspberry Pi OS / Debian
+   13), so use a venv with `ai-edge-litert`.
+3. For stable latency, use the `performance` CPU governor and watch the
+   reported temperature and `throttled` flags. The runner records these but
+   never changes them.
+
+Bench tool:
+[`../../../analysis_scripts/rpi4_latency_bench/run_rpi4_latency_bench.py`](../../../analysis_scripts/rpi4_latency_bench/run_rpi4_latency_bench.py).
 
 ## Test Plan
 
