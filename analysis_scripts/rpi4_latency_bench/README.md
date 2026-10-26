@@ -29,3 +29,25 @@ python analysis_scripts/rpi4_latency_bench/run_rpi4_latency_bench.py \
   frequency, temperature, throttle flags).
 - Use `--threads 4` for all cores, and `--no-xnnpack` to measure the
   reference kernels instead of the XNNPACK delegate.
+- Before any run, the script checks that every core uses the
+  `--require-governor` cpufreq governor (default `performance`). If not, it
+  stops without running anything.
+- Each results file records `vcgencmd get_throttled` before and after the
+  timed runs, plus the temperature. `flags` marks under-voltage, frequency
+  capping, throttling or soft temperature limits that are active after the
+  run or were newly set during it, and temperatures >= 80 C (`none` when
+  clean).
+
+Summary CSV (`results/rpi4_summary.csv`, one row per model and thread count;
+the `rp2040_summary.csv` columns plus `threads`, `xnnpack`, `governor`,
+`temp_after_c`, `throttled_before`, `throttled_after` and `flags`):
+
+```bash
+python analysis_scripts/rpi4_latency_bench/summarize_rpi4_results.py --threads 1 4 \
+  --models dscnn_us8k_min_int8 DSCNN_64_SC_25_1s_int8 DSCNN_64_SC_25_2s_int8 \
+    DSCNN_64_SC_5_1s_int8 DSCNN_64_SC_5_2s_int8 DSCNN_64_SC_1_1s_int8 DSCNN_64_SC_1_2s_int8
+```
+
+On the Pi, `static_ram_bytes` is the runner's peak RSS increase. It is mostly
+interpreter/XNNPACK setup (~10-11.5 MB for every model), so it is not
+comparable to the RP2040's static RAM.

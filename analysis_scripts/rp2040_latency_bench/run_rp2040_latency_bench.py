@@ -109,7 +109,7 @@ def infeasible_line(model_id: str, reason: str, arena_bytes: int) -> str:
     )
 
 
-_SUMMARY_FIELD_RE = re.compile(r"\b(\w+)=([-\w.]+)")
+_SUMMARY_FIELD_RE = re.compile(r"\b(\w+)=([-\w.+@]+)")
 
 
 def parse_results_file(path: Path) -> Dict[str, Any]:

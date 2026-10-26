@@ -172,6 +172,7 @@ def main(argv=None) -> int:
     # Start the peak-RSS window here so the runtime import is not counted.
     peak_window = "vmhwm" if reset_peak_rss() else "ru_maxrss"
     temp_before = soc_temp_c()
+    throttled_before = throttled_flags()
     kwargs = {"model_path": args.model, "num_threads": args.threads}
     if args.no_xnnpack:
         # Experimental op resolver without default delegates (XNNPACK off).
@@ -223,7 +224,10 @@ def main(argv=None) -> int:
         f"cpu_governor={read_text(cpu + 'scaling_governor')} cpu_cur_khz={read_text(cpu + 'scaling_cur_freq')} "
         f"cpu_max_khz={read_text(cpu + 'scaling_max_freq')}"
     )
-    emit(f"temp_before_c={temp_before} temp_after_c={soc_temp_c()} throttled={throttled_flags()}")
+    emit(
+        f"temp_before_c={temp_before} temp_after_c={soc_temp_c()} "
+        f"throttled_before={throttled_before} throttled={throttled_flags()}"
+    )
     emit(
         f"rss_before_load_bytes={rss_before} peak_rss_bytes={peak_rss} "
         f"peak_rss_delta_bytes={peak_rss - rss_before} peak_window={peak_window} "

@@ -145,6 +145,26 @@ class RaspberryPi4FlowTests(unittest.TestCase):
                                             num_channels=64).error_code, HIL_ERROR_FLASH_OVERFLOW)
 
 
+class ThrottleFlagTests(unittest.TestCase):
+    """Tests covering the Pi bench's throttle/temperature flags."""
+
+    def test_throttle_flags(self):
+        # Active conditions, newly set sticky bits, unreadable flags and heat are all flagged; old sticky bits are not.
+        """Validate throttle flag decoding."""
+        bench_dir = ROOT_DIR / "analysis_scripts" / "rpi4_latency_bench"
+        if str(bench_dir) not in sys.path:
+            sys.path.insert(0, str(bench_dir))
+        import run_rpi4_latency_bench as bench
+
+        self.assertEqual(bench.throttle_flags("0x0", "0x0", "55.0"), [])
+        self.assertEqual(bench.throttle_flags("0x0", "0x50005", "60.0"),
+                         ["under_voltage_now", "under_voltage_during_run", "throttled_now", "throttled_during_run"])
+        self.assertEqual(bench.throttle_flags("0x10000", "0x10000", "60.0"), [])
+        self.assertEqual(bench.throttle_flags("na", "na", "81.2"), ["throttle_unknown", "hot"])
+        env = bench.runner_env(RUNNER_OUTPUT + ["temp_before_c=40.0 temp_after_c=45.0 throttled_before=0x0 throttled=0x0"])
+        self.assertEqual((env["runtime"], env["throttled"], env["temp_after_c"]), ("ai_edge_litert@1.4.0", "0x0", "45.0"))
+
+
 class RunnerScriptTests(unittest.TestCase):
     """Tests covering the on-device runner, executed locally."""
 
