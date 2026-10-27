@@ -15,10 +15,18 @@ and the high end of each power range.
 
 A (model, board, threads) pair is evaluated for a spec only if the model's
 input window equals ``L`` (1 s exports for L = 1 s, 2 s exports and the
-baseline for L = 2 s). It is infeasible if its benchmark status is not
-``ok``, if ``t > S``, or, when ``S > L``, if ``t > S - L`` (no time left to
-listen for ``L`` and then compute; this is the case where the sleep term
-would be negative).
+baseline for L = 2 s). It is infeasible if:
+
+- its benchmark status is not ``ok``;
+- ``t > S`` (it cannot keep up with the stride);
+- ``S > L`` and ``t > S - L``. This is a **conservative assumption**: compute
+  is not overlapped with listening, so each period is listen ``L``, compute
+  ``t``, sleep ``S - L - t``, and the sleep term must not go negative. If a
+  pair ever fails only this rule, revisit whether overlap is possible;
+- the spec has a maximum response latency ``R`` and ``t > R``. Response
+  latency is the time from the end of a window to the result. Today it is
+  the measured ``invoke()`` time only; on-device log-mel preprocessing will
+  add to it once implemented.
 
 Selection: for a minimum accuracy, the feasible pair with the lowest energy
 wins and the next one is the runner-up. Accuracy is the int8 TFLite
@@ -92,6 +100,7 @@ class Estimate:
     applicable: bool
     feasible: bool
     reason: str
+    max_response_s: Optional[float] = None
     energy_j: Dict[str, float] = field(default_factory=dict)
     avg_power_w: Dict[str, float] = field(default_factory=dict)
 
@@ -206,9 +215,20 @@ def energy_per_inference(t: float, L: float, S: float, p_active: float, p_listen
     return p_active * t + p_listen * L + p_sleep * (S - L - t)
 
 
-def estimate(pair: Pair, L: float, S: float, power: Dict[str, BoardPower]) -> Estimate:
-    """Evaluate one pair under one spec with the low and high power values."""
-    result = Estimate(pair=pair, L=L, S=S, applicable=math.isclose(pair.window_s, L), feasible=False, reason="")
+def estimate(
+    pair: Pair,
+    L: float,
+    S: float,
+    power: Dict[str, BoardPower],
+    max_response_s: Optional[float] = None,
+) -> Estimate:
+    """Evaluate one pair under one spec with the low and high power values.
+
+    ``max_response_s`` (``R``) is an optional limit on the response latency
+    ``t``, separate from the stride.
+    """
+    result = Estimate(pair=pair, L=L, S=S, applicable=math.isclose(pair.window_s, L), feasible=False, reason="",
+                      max_response_s=max_response_s)
     if not result.applicable:
         result.reason = f"window {pair.window_s:g} s != L"
         return result
@@ -220,7 +240,10 @@ def estimate(pair: Pair, L: float, S: float, power: Dict[str, BoardPower]) -> Es
         result.reason = "too slow (t > S)"
         return result
     if S > L and t > S - L:
-        result.reason = "too slow (t > S - L)"
+        result.reason = "too slow (t > S - L, no compute/listen overlap)"
+        return result
+    if max_response_s is not None and t > max_response_s:
+        result.reason = "too slow (t > R)"
         return result
     board = power[pair.board]
     active = board.active_for(pair.threads)
@@ -259,7 +282,7 @@ def pair_label(pair: Pair) -> str:
 def write_estimates_csv(path: Path, estimates: Sequence[Estimate]) -> None:
     """Write every applicable estimate (all specs) to one CSV."""
     columns = [
-        "L_s", "S_s", "model", "board", "threads", "xnnpack", "latency_s", "feasible", "reason",
+        "L_s", "S_s", "max_response_s", "model", "board", "threads", "xnnpack", "latency_s", "feasible", "reason",
         "energy_mj_low", "energy_mj_high", "avg_power_mw_low", "avg_power_mw_high", "val_acc", "val_macro_f1",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -270,7 +293,8 @@ def write_estimates_csv(path: Path, estimates: Sequence[Estimate]) -> None:
             if not e.applicable:
                 continue
             writer.writerow({
-                "L_s": e.L, "S_s": e.S, "model": e.pair.model, "board": e.pair.board,
+                "L_s": e.L, "S_s": e.S, "max_response_s": "" if e.max_response_s is None else e.max_response_s,
+                "model": e.pair.model, "board": e.pair.board,
                 "threads": e.pair.threads, "xnnpack": e.pair.xnnpack, "latency_s": e.pair.latency_s,
                 "feasible": e.feasible, "reason": e.reason,
                 "energy_mj_low": round(e.energy_j["low"] * 1e3, 4) if e.feasible else "",
@@ -290,11 +314,25 @@ def _fmt_choice(ranked: Sequence[Estimate], index: int, bound: str) -> str:
     return f"{pair_label(e.pair)} ({e.energy_j[bound] * 1e3:,.1f} mJ, acc {e.pair.val_acc:.3f})"
 
 
-def spec_report(estimates: Sequence[Estimate], L: float, S: float, min_accuracies: Sequence[float]) -> str:
+def _fmt_response(max_response_s: Optional[float]) -> str:
+    """Format a response limit for headings."""
+    return "no limit" if max_response_s is None else f"{max_response_s * 1e3:g} ms"
+
+
+def spec_report(
+    estimates: Sequence[Estimate],
+    L: float,
+    S: float,
+    min_accuracies: Sequence[float],
+    max_response_s: Optional[float] = None,
+) -> str:
     """Markdown for one spec: all applicable pairs, then the selections."""
-    rows = [e for e in estimates if e.L == L and e.S == S and e.applicable]
+    rows = [
+        e for e in estimates
+        if e.L == L and e.S == S and e.applicable and e.max_response_s == max_response_s
+    ]
     lines = [
-        f"### L = {L:g} s, S = {S:g} s",
+        f"### L = {L:g} s, S = {S:g} s, R = {_fmt_response(max_response_s)}",
         "",
         "| Pair | t (ms) | Val acc | E low (mJ) | E high (mJ) | P avg low (mW) | P avg high (mW) | Feasible |",
         "|---|---|---|---|---|---|---|---|",
@@ -326,6 +364,39 @@ def spec_report(estimates: Sequence[Estimate], L: float, S: float, min_accuracie
     return "\n".join(lines)
 
 
+def _winner_cell(ranked_low: Sequence[Estimate], ranked_high: Sequence[Estimate]) -> str:
+    """One compact cell: the winner, noting when low and high power disagree."""
+    if not ranked_low and not ranked_high:
+        return "none feasible"
+    low = pair_label(ranked_low[0].pair) if ranked_low else "none"
+    high = pair_label(ranked_high[0].pair) if ranked_high else "none"
+    return low if low == high else f"low: {low} / high: {high}"
+
+
+def response_summary(
+    estimates: Sequence[Estimate],
+    specs: Sequence[Tuple[float, float]],
+    responses: Sequence[Optional[float]],
+    min_accuracies: Sequence[float],
+) -> str:
+    """Markdown table: winner per (spec, response limit) and accuracy floor."""
+    lines = [
+        "| L | S | R | " + " | ".join(f"min acc {a:.2f}" for a in min_accuracies) + " |",
+        "|---|---|---|" + "---|" * len(min_accuracies),
+    ]
+    for L, S in specs:
+        for response in responses:
+            rows = [e for e in estimates if e.L == L and e.S == S and e.applicable and e.max_response_s == response]
+            cells = [_winner_cell(select(rows, a, "low"), select(rows, a, "high")) for a in min_accuracies]
+            lines.append(f"| {L:g} s | {S:g} s | {_fmt_response(response)} | " + " | ".join(cells) + " |")
+    return "\n".join(lines)
+
+
+def _parse_response(text: str) -> Optional[float]:
+    """Parse a response limit in seconds, or ``none``."""
+    return None if text.strip().lower() == "none" else float(text)
+
+
 def _parse_spec(text: str) -> Tuple[float, float]:
     """Parse ``L,S`` (seconds)."""
     left, right = text.split(",")
@@ -341,6 +412,8 @@ def parse_args() -> argparse.Namespace:
                         help="Specs as L,S in seconds (default: 1,1 1,2 2,2 2,4).")
     parser.add_argument("--min-acc", type=float, nargs="+", default=list(DEFAULT_MIN_ACCURACIES),
                         help="Minimum validation-fold accuracies (default: 0.64 0.67 0.69).")
+    parser.add_argument("--max-response", type=_parse_response, nargs="+", default=[None],
+                        help="Response-latency limits in seconds, or 'none' (default: none).")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     return parser.parse_args()
 
@@ -350,17 +423,28 @@ def main() -> int:
     args = parse_args()
     power = load_power(args.power)
     pairs = load_pairs(args.csv)
-    estimates = [estimate(pair, L, S, power) for L, S in args.spec for pair in pairs]
+    estimates = [
+        estimate(pair, L, S, power, response)
+        for L, S in args.spec
+        for response in args.max_response
+        for pair in pairs
+    ]
     args.results_dir.mkdir(parents=True, exist_ok=True)
     write_estimates_csv(args.results_dir / "energy_estimates.csv", estimates)
-    report = "\n\n".join(spec_report(estimates, L, S, args.min_acc) for L, S in args.spec)
+    summary = response_summary(estimates, args.spec, args.max_response, args.min_acc)
+    details = "\n\n".join(
+        spec_report(estimates, L, S, args.min_acc, response)
+        for L, S in args.spec
+        for response in args.max_response
+    )
+    report = "## Winners\n\n" + summary + "\n\n## Details\n\n" + details
     header = (
         "Accuracy is int8 validation-fold accuracy (fold 9); the held-out test fold is not evaluated.\n"
         "Low/high use the low/high ends of every power range in board_power.yaml.\n"
     )
     (args.results_dir / "energy_selection.md").write_text(header + "\n" + report + "\n", encoding="utf-8")
     print(header)
-    print(report)
+    print(summary)
     return 0
 
 

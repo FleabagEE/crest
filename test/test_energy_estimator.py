@@ -50,12 +50,38 @@ class EnergyModelTests(unittest.TestCase):
         self.assertEqual(ee.estimate(_pair(status="infeasible:arena"), 1.0, 1.0, POWER).reason,
                          "status infeasible:arena")
         self.assertEqual(ee.estimate(_pair(t=1.2), 1.0, 1.0, POWER).reason, "too slow (t > S)")
-        self.assertEqual(ee.estimate(_pair(t=1.2), 1.0, 2.0, POWER).reason, "too slow (t > S - L)")
+        self.assertEqual(ee.estimate(_pair(t=1.2), 1.0, 2.0, POWER).reason,
+                         "too slow (t > S - L, no compute/listen overlap)")
         ok = ee.estimate(_pair(board="rpi4", threads=4, t=0.01), 1.0, 2.0, POWER)
         self.assertTrue(ok.feasible)
         self.assertAlmostEqual(ok.energy_j["low"], 6.4 * 0.01 + 2.7 * 1.0 + 2.7 * 0.99)
         self.assertAlmostEqual(ok.energy_j["high"], 7.3 * 0.01 + 2.9 * 1.0 + 2.9 * 0.99)
         self.assertAlmostEqual(ok.avg_power_w["low"], ok.energy_j["low"] / 2.0)
+
+
+class ResponseLimitTests(unittest.TestCase):
+    """Tests covering the maximum response latency R."""
+
+    def test_response_limit(self):
+        # R excludes pairs with t > R independently of the stride; None means no limit; t == R is allowed.
+        """Validate the response-latency limit."""
+        self.assertTrue(ee.estimate(_pair(t=0.3), 1.0, 1.0, POWER).feasible)
+        limited = ee.estimate(_pair(t=0.3), 1.0, 1.0, POWER, max_response_s=0.2)
+        self.assertEqual((limited.feasible, limited.reason, limited.max_response_s), (False, "too slow (t > R)", 0.2))
+        self.assertTrue(ee.estimate(_pair(t=0.2), 1.0, 1.0, POWER, max_response_s=0.2).feasible)
+        self.assertEqual(ee.estimate(_pair(t=1.5), 1.0, 1.0, POWER, max_response_s=0.2).reason, "too slow (t > S)")
+
+    def test_response_summary_switches_winner(self):
+        # When R excludes the MCU, the summary shows the Pi; when low/high power disagree it shows both.
+        """Validate response_summary()."""
+        pairs = [_pair(model="mcu", t=0.5, acc=0.68), _pair(model="pi", board="rpi4", threads=4, t=0.001, acc=0.68)]
+        estimates = [ee.estimate(p, 1.0, 1.0, POWER, r) for r in (None, 0.2) for p in pairs]
+        table = ee.response_summary(estimates, [(1.0, 1.0)], [None, 0.2], [0.67, 0.99])
+        rows = table.splitlines()[2:]
+        self.assertIn("| no limit | mcu @ RP2040 | none feasible |", rows[0])
+        self.assertIn("| 200 ms | pi @ Pi 4T | none feasible |", rows[1])
+        self.assertEqual(ee._parse_response("none"), None)
+        self.assertEqual(ee._parse_response("0.5"), 0.5)
 
 
 class SelectionTests(unittest.TestCase):

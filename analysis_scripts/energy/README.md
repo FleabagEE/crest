@@ -25,14 +25,23 @@ Turns measured latency into energy per inference and picks the best
   S >  L: E = P_active * t + P_listen * L + P_sleep * (S - L - t)
   ```
 
-  A pair counts only if its input window equals `L`. It is infeasible if its
-  benchmark status is not `ok`, if `t > S`, or (for `S > L`) if `t > S - L`.
+  A pair counts only if its input window equals `L`. It is infeasible if:
+  - its benchmark status is not `ok`;
+  - `t > S`;
+  - for `S > L`, `t > S - L`. This is a **conservative assumption**: compute
+    does not overlap listening, so each period is listen `L`, compute `t`,
+    then sleep. Revisit it if a pair ever fails only this rule;
+  - `t > R` when a maximum response latency `R` is given (`--max-response`).
+    `R` is separate from the stride. Response latency is currently the
+    `invoke()` time only; on-device log-mel preprocessing will add to it.
   It writes `results/energy_estimates.csv` (every pair, low/high energy and
   average power) and `results/energy_selection.md` (per spec: all pairs, then
   winner and runner-up for each minimum **validation-fold** accuracy, low vs.
-  high power).
+  high power), starting with a compact winners table over all specs and
+  response limits.
 
 ```bash
 python analysis_scripts/energy/estimate_energy.py                                   # default specs
 python analysis_scripts/energy/estimate_energy.py --spec 1,1 2,4 --min-acc 0.67     # custom
+python analysis_scripts/energy/estimate_energy.py --max-response none 0.2 0.5 1.0  # response limits
 ```
