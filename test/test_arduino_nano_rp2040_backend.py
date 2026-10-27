@@ -123,7 +123,13 @@ class RP2040ContractTests(unittest.TestCase):
         self.assertIsInstance(device, arduino_nano_rp2040.ArduinoNanoRP2040Device)
         self.assertEqual(device.spec.arena_sizes_kb, [20, 40])
         self.assertFalse(device.supports_energy_measurement())
-        self.assertEqual(device.runtime_mode_build_defines(), {"CREST_WARMUP_RUNS": 3})
+        self.assertEqual(
+            device.runtime_mode_build_defines(), {"CREST_WARMUP_RUNS": 3, "CREST_HOLD_NINA_RESET": 0}
+        )
+        held = arduino_nano_rp2040.ArduinoNanoRP2040Device(device_options={"hold_nina_reset": True})
+        self.assertEqual(held.runtime_mode_build_defines()["CREST_HOLD_NINA_RESET"], 1)
+        with self.assertRaises(ValueError):
+            arduino_nano_rp2040.resolve_rp2040_options({"hold_nina_reset": "yes"})
         self.assertIsNone(resolve_device_options("ARDUINO_NANO_RP2040_CONNECT", {}))
         with self.assertRaises(ValueError):
             resolve_device_options("ARDUINO_NANO_RP2040_CONNECT", {"rp2040": {"warmup_runs": -2}})
@@ -176,8 +182,12 @@ class RP2040SketchStagingTests(unittest.TestCase):
         text = LATENCY_SKETCH.read_text(encoding="utf-8")
         self.assertNotIn("CREST_HARNESS_TRIGGER_PIN", text)
         self.assertNotIn("CREST_HARNESS_ARM_PIN", text)
-        self.assertNotIn("pinMode", text)
+        # The only GPIO the sketch may drive is NINA_RESETN (opt-in reset hold).
+        pin_mode_calls = [line.strip() for line in text.splitlines() if "pinMode(" in line]
+        self.assertEqual(pin_mode_calls, ["pinMode(NINA_RESETN, OUTPUT);"])
         self.assertIn("arena_used_bytes()", text)
+        self.assertIn("#define CREST_HOLD_NINA_RESET 0", text)
+        self.assertIn("digitalWrite(NINA_RESETN, LOW);", text)
         with tempfile.TemporaryDirectory() as tmp:
             sketch_dir = Path(tmp) / "my-model 1"
             sketch_dir.mkdir()

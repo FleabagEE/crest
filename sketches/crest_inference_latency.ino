@@ -74,6 +74,13 @@
 #define CREST_PREPROCESS_ON_DEVICE 0
 #endif
 
+// Hold the on-board NINA-W102 Wi-Fi module in reset (RESET_N low) so its
+// power state is defined instead of depending on pull resistors. Only the
+// Nano RP2040 Connect has this module (and its NINA_RESETN pin).
+#ifndef CREST_HOLD_NINA_RESET
+#define CREST_HOLD_NINA_RESET 0
+#endif
+
 #ifndef CREST_SKIP_SERIAL_WAIT
 #define CREST_SKIP_SERIAL_WAIT 0
 #endif
@@ -183,6 +190,13 @@ bool FillInputTensor() {
 }
 
 void setup() {
+#if CREST_HOLD_NINA_RESET
+#if !defined(ARDUINO_NANO_RP2040_CONNECT)
+#error "CREST_HOLD_NINA_RESET is only supported on the Nano RP2040 Connect."
+#endif
+  pinMode(NINA_RESETN, OUTPUT);
+  digitalWrite(NINA_RESETN, LOW);
+#endif
   Serial.begin(115200);
   Serial.setTimeout(kSerialTimeoutMs);
 #if !CREST_SKIP_SERIAL_WAIT

@@ -26,6 +26,8 @@ device:
     upload_timeout_s: 90.0
     upload_retries: 2
     port_wait_s: 10.0
+    # true: hold the NINA-W102 Wi-Fi module in reset (defined deployment power state).
+    hold_nina_reset: false
 
 dataset:
   name: urbansound8k_mel

@@ -53,6 +53,7 @@ RP2040_OPTION_KEYS = (
     "upload_timeout_s",
     "upload_retries",
     "port_wait_s",
+    "hold_nina_reset",
 )
 
 RUN_LINE_RE = re.compile(r"^board=(?P<board>\S+)\s+model=(?P<model>\S+)\s+run=(?P<run>-?\d+)\s+(?P<rest>.*)$")
@@ -76,6 +77,10 @@ class ArduinoNanoRP2040Options:
         Extra upload attempts after the first failure.
     port_wait_s : float
         Time to wait for the serial port to re-enumerate after upload or reset.
+    hold_nina_reset : bool
+        Drive ``NINA_RESETN`` low in ``setup()`` (``CREST_HOLD_NINA_RESET=1``)
+        so the NINA-W102 module stays in reset. Off by default, which leaves
+        the module's state to the board's pull resistors.
     """
 
     arena_sizes_kb: tuple[int, ...] = DEFAULT_ARENA_SIZES_KB
@@ -83,6 +88,7 @@ class ArduinoNanoRP2040Options:
     upload_timeout_s: float = 90.0
     upload_retries: int = 2
     port_wait_s: float = 10.0
+    hold_nina_reset: bool = False
 
 
 def _as_int(name: str, value: object, *, minimum: int) -> int:
@@ -149,6 +155,31 @@ def _as_positive_float(name: str, value: object) -> float:
     return parsed
 
 
+def _as_bool(name: str, value: object) -> bool:
+    """Validate one boolean option.
+
+    Parameters
+    ----------
+    name : str
+        Option name used in error messages.
+    value : object
+        Raw option value.
+
+    Returns
+    -------
+    bool
+        The value.
+
+    Raises
+    ------
+    ValueError
+        If the value is not a boolean.
+    """
+    if not isinstance(value, bool):
+        raise ValueError(f"device.rp2040.{name} must be true or false.")
+    return value
+
+
 def resolve_rp2040_options(
     device_options: Optional[Mapping[str, object]],
 ) -> ArduinoNanoRP2040Options:
@@ -204,6 +235,7 @@ def resolve_rp2040_options(
             "upload_retries", _pick("upload_retries", defaults.upload_retries), minimum=0
         ),
         port_wait_s=_as_positive_float("port_wait_s", _pick("port_wait_s", defaults.port_wait_s)),
+        hold_nina_reset=_as_bool("hold_nina_reset", _pick("hold_nina_reset", defaults.hold_nina_reset)),
     )
 
 
@@ -447,14 +479,18 @@ class ArduinoNanoRP2040Device(ArduinoDevice):
         return False
 
     def runtime_mode_build_defines(self) -> Dict[str, int]:
-        """Return the warm-up count compiled into the latency sketch.
+        """Return the warm-up count and NINA reset policy for the latency sketch.
 
         Returns
         -------
         Dict[str, int]
-            ``CREST_WARMUP_RUNS`` for the staged sketch.
+            ``CREST_WARMUP_RUNS`` and ``CREST_HOLD_NINA_RESET`` for the staged
+            sketch.
         """
-        return {"CREST_WARMUP_RUNS": int(self._rp2040_options.warmup_runs)}
+        return {
+            "CREST_WARMUP_RUNS": int(self._rp2040_options.warmup_runs),
+            "CREST_HOLD_NINA_RESET": int(self._rp2040_options.hold_nina_reset),
+        }
 
     def compile(
         self,

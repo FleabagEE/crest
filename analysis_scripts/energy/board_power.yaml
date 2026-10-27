@@ -1,0 +1,188 @@
+# Copyright (c) 2026 UCLA Networked & Embedded Systems Laboratory
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Per-board power parameters (watts) for analysis_scripts/energy/estimate_energy.py.
+#
+# Every value is a [low, high] range with a source and a confidence note.
+# Nothing here was measured on our own boards yet; replace these ranges with
+# USB power-meter measurements when available.
+#
+# Model (per inference, window L, stride S, inference time t):
+#   S <= L: E = P_active * t + P_listen * (S - t)
+#   S >  L: E = P_active * t + P_listen * L + P_sleep * (S - L - t)
+#
+# P_active is chosen per (board, threads). "listen" means awake between
+# inferences, capturing the next audio window; "sleep" is the lowest-power
+# state the board can reach between windows.
+
+schema_version: 1
+retrieved: "2026-10-27"
+
+boards:
+  rpi4:
+    description: >-
+      Raspberry Pi 4 Model B, whole board at the 5 V USB-C input, nothing on USB,
+      no HDMI display. Our board runs at 1.8 GHz (performance governor); all
+      published figures below are for 1.5 GHz boards, so the true values may be
+      somewhat higher than these ranges.
+    P_active:
+      threads_4:
+        watts: [6.4, 7.28]
+        low_source: >-
+          Pi Dramble power benchmarks, Raspberry Pi 4 B, "400% CPU load
+          (stress --cpu 4)": 1280 mA = 6.4 W, USB power meter, nothing on USB.
+          https://pidramble.com/node/27
+        high_source: >-
+          Raspberry Pi Ltd, "Thermal testing Raspberry Pi 4" (launch firmware):
+          peak 7.28 W under a worst-case synthetic CPU + GPU workload.
+          https://www.raspberrypi.com/news/thermal-testing-raspberry-pi-4/
+        confidence: >-
+          Medium. Both are whole-board measurements, but with different loads
+          (integer stress vs. CPU + GPU) than XNNPACK int8 inference, at 1.5 GHz
+          rather than our 1.8 GHz.
+      threads_1:
+        watts: [3.63, 5.09]
+        low_source: >-
+          DERIVED, no published 1-thread figure was found. Linear per-core
+          share: idle 2.7 W + (6.4 - 2.7) / 4 = 3.63 W (Pi Dramble numbers).
+        high_source: >-
+          DERIVED, no published 1-thread figure was found. Assumes one busy core
+          can cost up to half of the 4-core increment (shared L2, DRAM and
+          uncore wake up for the first core): 2.89 W + (7.28 - 2.89) / 2 = 5.09 W
+          (Raspberry Pi thermal-testing numbers).
+        confidence: >-
+          Low. No published single-thread measurement exists in the sources we
+          found; this range is an interpolation and should be the first thing
+          replaced by a USB power-meter measurement.
+    P_listen:
+      watts: [2.7, 2.89]
+      low_source: >-
+        Pi Dramble power benchmarks, Raspberry Pi 4 B idle: 540 mA = 2.7 W.
+        https://pidramble.com/node/27
+      high_source: >-
+        Raspberry Pi Ltd thermal testing: 2.89 W idling at the desktop.
+        https://www.raspberrypi.com/news/thermal-testing-raspberry-pi-4/
+      confidence: >-
+        Medium-high for an idle board. Listening also needs audio capture
+        (USB/I2S microphone), which is not included.
+    P_sleep:
+      same_as: P_listen
+      note: >-
+        The Pi 4 has no whole-board sleep state usable between windows, so
+        P_sleep = P_listen (idle power), as specified for this model.
+
+  rp2040:
+    description: >-
+      Arduino Nano RP2040 Connect, BOARD-LEVEL power at the 5 V USB input (not
+      just the RP2040 chip), powered through the on-board MP2322 buck converter.
+      ESTIMATE ONLY, built from component datasheets; to be replaced by a
+      measurement. Arduino's own datasheet lists busy-loop, low-power and
+      maximum power consumption as "TBC" (ABX00053 datasheet, section 2.2).
+    method: >-
+      watts = 3.3 V * (sum of 3.3 V rail currents) / buck efficiency.
+      Low uses each component's lowest plausible current and 90% efficiency;
+      high uses the highest and 80% efficiency. The components block below
+      lists every term; tests recompute the totals from it.
+    buck_efficiency: [0.90, 0.80]
+    buck_efficiency_source: >-
+      ASSUMPTION. MP2322 datasheet claims "high efficiency from 100 uA to 1 A"
+      (5 uA quiescent current), but no efficiency figure for our load could be
+      retrieved (vendor site blocked the download).
+    rail_voltage: 3.3
+    components:
+      # [low_mA, high_mA] per state: active (inference at 125 MHz), listen
+      # (awake between inferences, mic running), sleep (between windows).
+      rp2040_dvdd:
+        active: [10.9, 43.229]
+        listen: [9.0, 43.229]
+        sleep: [0.18, 4.5]
+        source: >-
+          RP2040 datasheet (RP-008371-DS-1), section 5.7.2, Table 637 (p. 623):
+          Popcorn 10.9 mA typical / 16.6 mA max DVDD at 48 MHz; BOOTSEL idle
+          9.0 mA typical; Dormant 0.18 mA typical; Sleep 4.5 mA max. High
+          active/listen = 16.6 mA scaled linearly from 48 to 125 MHz (43.2 mA),
+          i.e. the core never idles. DVDD comes from the on-chip linear
+          regulator, so its current is drawn from the 3.3 V rail.
+          https://pip-assets.raspberrypi.com/categories/814-rp2040/documents/RP-008371-DS-1-rp2040-datasheet.pdf
+      rp2040_iovdd:
+        active: [1.2, 4.3]
+        listen: [1.2, 4.3]
+        sleep: [0.0, 0.0]
+        source: >-
+          RP2040 datasheet Table 637, BOOTSEL mode IOVDD: 1.2 mA typical / 4.3 mA
+          max. Sleep: not listed; assumed negligible with IO idle.
+      rp2040_usb_vdd:
+        active: [1.4, 2.0]
+        listen: [0.2, 0.6]
+        sleep: [0.0, 0.0]
+        source: >-
+          RP2040 datasheet Table 637, BOOTSEL USB_VDD: active 1.4 / 2.0 mA,
+          idle 0.2 / 0.6 mA. Included because our sketch keeps USB CDC up;
+          a battery deployment without USB would drop this term. Sleep assumes
+          no USB.
+      qspi_flash_at25sf128a:
+        active: [0.013, 12.0]
+        listen: [0.013, 12.0]
+        sleep: [0.002, 0.013]
+        source: >-
+          Renesas AT25SF128A datasheet: ~10 mA active read (typical), 13 uA
+          standby, 2 uA deep power-down; a Renesas part listing shows 12 mA
+          read current. Low = standby (code runs from the XIP cache), high =
+          continuous reads. https://renesas.com/en/document/dst/at25sf128a-datasheet
+      nina_w102:
+        active: [0.0, 30.0]
+        listen: [0.0, 30.0]
+        sleep: [0.0, 30.0]
+        source: >-
+          u-blox NINA-W10 data sheet UBX-17065507 R17, section 4.2.6, Table 12
+          (from the ESP32 data sheet): modem-sleep (CPU running, radio off)
+          20 mA at 80 MHz, 27 mA at 160 MHz, 30 mA at 240 MHz. Section 2.3:
+          "minimum power when RESET_N is low", no figure (taken as 0).
+        uncertainty_note: >-
+          The module's state in our runs is UNKNOWN: our sketch does not drive
+          NINA_RESETN (RP2040 GPIO 24) and the core's initVariant() is empty, so
+          it depends on pull resistors. Low assumes it is held in reset, high
+          assumes it runs with the radio off (20-30 mA; 30 mA used). A one-time
+          USB power measurement of the board with and without
+          device.rp2040.hold_nina_reset: true will settle this. The sketch
+          option CREST_HOLD_NINA_RESET (added 2026-10-27, compiled, not yet
+          flashed) makes the deployed state explicit.
+      imu_lsm6dsox:
+        active: [0.0, 0.1]
+        listen: [0.0, 0.1]
+        sleep: [0.0, 0.1]
+        source: >-
+          ASSUMPTION (datasheet download timed out): never configured by our
+          sketch, so it stays in power-down; allowance 0-0.1 mA.
+      microphone_mp34dt06j:
+        active: [0.0, 0.0]
+        listen: [0.65, 0.65]
+        sleep: [0.0, 0.0]
+        source: >-
+          ASSUMPTION (datasheet not retrieved): ~0.65 mA while clocked for audio
+          capture, used only while listening; unclocked otherwise.
+      power_led_and_misc:
+        active: [1.0, 5.0]
+        listen: [1.0, 5.0]
+        sleep: [1.0, 5.0]
+        source: >-
+          ASSUMPTION: green power LED (DL1, always on), ATECC608A crypto in
+          sleep, buck quiescent current. LED resistor value not known; allowance
+          1-5 mA. In sleep this term dominates the low estimate.
+    P_active:
+      watts: [0.0532, 0.3986]
+      confidence: >-
+        Low (estimate). Component sum: 14.51-96.63 mA at 3.3 V. The width comes
+        mostly from the RP2040 core current at 125 MHz (not tabulated) and the
+        NINA module state.
+    P_listen:
+      watts: [0.0442, 0.3955]
+      confidence: >-
+        Low (estimate). 12.06-95.88 mA at 3.3 V; assumes the RP2040 stays awake
+        (no WFI) at the high end.
+    P_sleep:
+      watts: [0.0043, 0.1634]
+      confidence: >-
+        Low (estimate). 1.18-39.61 mA at 3.3 V; RP2040 dormant/sleep, USB off.
+        If the NINA module runs (high), it dominates; if held in reset (low),
+        the power LED dominates.

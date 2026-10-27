@@ -157,7 +157,8 @@ Per-backend nested blocks include:
 - `device.rp2040.*` (Nano RP2040 Connect, latency/memory only):
   `arena_sizes_kb` (ascending arena sweep in KiB), `warmup_runs` (default 5),
   `upload_timeout_s` (default 90), `upload_retries` (default 2), and
-  `port_wait_s` (default 10). See
+  `port_wait_s` (default 10), and `hold_nina_reset` (default false; true drives
+  `NINA_RESETN` low so the Wi-Fi module stays in reset). See
   [`nas_config_audio_rp2040.yaml`](nas_config_audio_rp2040.yaml).
 
 STM32 option plumbing is resolved by
