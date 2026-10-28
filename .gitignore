@@ -93,6 +93,8 @@ analysis_scripts/cs3_audio_sensitivity/results/
 analysis_scripts/rp2040_latency_bench/results/
 analysis_scripts/rpi4_latency_bench/results/
 analysis_scripts/energy/results/
+analysis_scripts/rp2040_logmel/build/
+analysis_scripts/rp2040_logmel/results/
 
 # Canonical STM32 LRUN workspace is materialized by setup_stm32.sh.
 # Ignore the vendor workspace by default and keep only the repo-owned overlay.
