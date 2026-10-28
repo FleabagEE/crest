@@ -84,6 +84,57 @@ class ResponseLimitTests(unittest.TestCase):
         self.assertEqual(ee._parse_response("0.5"), 0.5)
 
 
+class DesignTests(unittest.TestCase):
+    """Tests covering the streaming and naive preprocessing designs."""
+
+    PREP = (0.010, {
+        ("rp2040", 1): ee.Preprocessing(frame_s=0.004, window_s={1.0: 0.4, 2.0: 0.8}),
+        ("rpi4", 4): ee.Preprocessing(frame_s=0.012, window_s={1.0: 0.01}),
+    })
+
+    def test_streaming_adds_last_frame_and_listen_duty(self):
+        # Streaming: t = frame + inference; listening power rises by duty * (P_active - P_listen).
+        """Validate the streaming design."""
+        e = ee.estimate(_pair(t=0.1), 1.0, 1.0, POWER, design="streaming", preprocessing=self.PREP)
+        self.assertTrue(e.feasible)
+        self.assertAlmostEqual(e.active_s, 0.104)
+        self.assertAlmostEqual(e.duty, 0.4)
+        listen_low = 0.04 + 0.4 * (0.05 - 0.04)
+        self.assertAlmostEqual(e.energy_j["low"], 0.05 * 0.104 + listen_low * (1.0 - 0.104))
+        limited = ee.estimate(_pair(t=0.1), 1.0, 1.0, POWER, 0.1, design="streaming", preprocessing=self.PREP)
+        self.assertEqual(limited.reason, "too slow (t > R)")
+        slow = ee.estimate(_pair(board="rpi4", threads=4, t=0.001), 1.0, 1.0, POWER, design="streaming",
+                           preprocessing=self.PREP)
+        self.assertEqual(slow.reason, "cannot stream (frame time > hop)")
+
+    def test_naive_adds_whole_window_and_requires_timing(self):
+        # Naive: t = whole-window preprocessing + inference; missing timings exclude the pair explicitly.
+        """Validate the naive design."""
+        e = ee.estimate(_pair(t=0.1, window=2.0), 2.0, 2.0, POWER, design="naive", preprocessing=self.PREP)
+        self.assertAlmostEqual(e.active_s, 0.9)
+        self.assertAlmostEqual(e.energy_j["high"], 0.4 * 0.9 + 0.4 * (2.0 - 0.9))
+        self.assertEqual(ee.estimate(_pair(t=0.7), 1.0, 1.0, POWER, design="naive", preprocessing=self.PREP).reason,
+                         "too slow (t > S)")
+        missing = ee.estimate(_pair(board="rpi4", threads=1, t=0.001), 1.0, 1.0, POWER, design="naive",
+                              preprocessing=self.PREP)
+        self.assertEqual(missing.reason, "no preprocessing timing")
+        no_window = ee.estimate(_pair(board="rpi4", threads=4, t=0.001, window=2.0), 2.0, 2.0, POWER, design="naive",
+                                preprocessing=self.PREP)
+        self.assertEqual(no_window.reason, "no 2 s window preprocessing timing")
+
+    def test_load_preprocessing_skips_pending(self):
+        # Pending (unmeasured) entries are left out instead of being treated as zero.
+        """Validate load_preprocessing()."""
+        hop, table = ee.load_preprocessing()
+        self.assertEqual(hop, 0.010)
+        self.assertIn(("rp2040", 1), table)
+        self.assertAlmostEqual(table[("rp2040", 1)].window_s[2.0], 0.930424)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "p.yaml"
+            path.write_text("hop_s: 0.01\nboards:\n  rpi4:\n    threads_1:\n      pending: true\n")
+            self.assertEqual(ee.load_preprocessing(path), (0.01, {}))
+
+
 class SelectionTests(unittest.TestCase):
     """Tests covering winner/runner-up selection."""
 

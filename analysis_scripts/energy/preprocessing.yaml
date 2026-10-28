@@ -1,0 +1,37 @@
+# Copyright (c) 2026 UCLA Networked & Embedded Systems Laboratory
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# Measured log-mel preprocessing times per (board, threads), for the
+# streaming and naive designs in estimate_energy.py.
+#
+#   frame_s:   one frame = the work for one hop (hop_s of audio)
+#   window_s:  a whole window computed in batch, keyed by window length (s)
+#
+# Streaming design: frames are computed as audio arrives; response latency =
+# frame_s + inference; listening power rises by duty * (P_active - P_listen),
+# with duty = frame_s / hop_s.
+# Naive design: the whole window is computed after it ends; t = window_s[L] +
+# inference.
+
+hop_s: 0.010
+
+boards:
+  rp2040:
+    threads_1:
+      frame_s: 0.004626
+      window_s:
+        1: 0.460508
+        2: 0.930424
+      source: >-
+        Nano RP2040 Connect, sketches/logmel_golden, integer q31 front end
+        (crest_logmel.h, bit-exact with the host build), PCM in RAM, 125 MHz,
+        2026-10-28: frame median over 98 frames; window medians of 5 runs
+        (98 / 198 frames + int8 quantization).
+  rpi4:
+    # Training repo's numpy log_mel on the Pi via
+    # analysis_scripts/rpi4_latency_bench/run_pi_logmel_timing.py, with BLAS
+    # threads matching the inference thread count.
+    threads_1:
+      pending: true
+    threads_4:
+      pending: true

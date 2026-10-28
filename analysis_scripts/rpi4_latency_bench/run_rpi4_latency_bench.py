@@ -248,7 +248,8 @@ def main() -> int:
     session = check_governors(device, args.require_governor)
     print(f"session check: {session}", flush=True)
     if not session["ok"]:
-        print(f"ABORT: every core must use the '{args.require_governor}' governor (got {session.get('governors')}); "
+        reason = session.get("error") or f"got {session.get('governors')}"
+        print(f"ABORT: Pi not reachable or not every core on the '{args.require_governor}' governor ({reason}); "
               "nothing was run.", flush=True)
         return 3
     failures = 0

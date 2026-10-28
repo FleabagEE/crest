@@ -40,8 +40,24 @@ Turns measured latency into energy per inference and picks the best
   high power), starting with a compact winners table over all specs and
   response limits.
 
+- [`preprocessing.yaml`](preprocessing.yaml): measured log-mel times per
+  (board, threads): one frame (= one 10 ms hop) and whole 1 s / 2 s windows.
+  Unmeasured entries are marked `pending` and excluded, never treated as zero.
+- `--design` chooses how preprocessing is accounted:
+  - `inference_only`: `t` = inference only (the earlier results);
+  - `naive`: the whole window's log-mel runs after the window ends,
+    `t = window time + inference`;
+  - `streaming`: frames are computed as audio arrives, so
+    `t = one frame + inference`, and listening power becomes
+    `P_listen + duty * (P_active - P_listen)` with `duty = frame / hop`.
+
+  With several designs, the report also lists every cell whose winner
+  differs from `inference_only`.
+
 ```bash
 python analysis_scripts/energy/estimate_energy.py                                   # default specs
 python analysis_scripts/energy/estimate_energy.py --spec 1,1 2,4 --min-acc 0.67     # custom
 python analysis_scripts/energy/estimate_energy.py --max-response none 0.2 0.5 1.0  # response limits
+python analysis_scripts/energy/estimate_energy.py --design inference_only streaming naive \
+  --max-response none 0.2 0.5 1.0                                                   # with preprocessing
 ```
