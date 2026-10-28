@@ -31,7 +31,20 @@ boards:
     # Training repo's numpy log_mel on the Pi via
     # analysis_scripts/rpi4_latency_bench/run_pi_logmel_timing.py, with BLAS
     # threads matching the inference thread count.
+    # Measured 2026-10-28 (results/pi_logmel_timing_20261028_151632.json):
+    # performance governor, 1.8 GHz, throttled 0x0, <= 47.2 C; Pi numpy 2.2.4,
+    # output within 9.5e-7 of the host (numpy 1.26.4). frame = log_mel on 400
+    # samples (median of 500, dominated by Python/numpy call overhead);
+    # windows = medians of 50.
     threads_1:
-      pending: true
+      frame_s: 0.0003112
+      window_s:
+        1: 0.0055482
+        2: 0.0118071
+      source: training repo log_mel (numpy), 1 BLAS thread
     threads_4:
-      pending: true
+      frame_s: 0.0003115
+      window_s:
+        1: 0.0055205
+        2: 0.0115322
+      source: training repo log_mel (numpy), 4 BLAS threads
