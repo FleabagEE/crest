@@ -120,8 +120,9 @@ def main() -> int:
     cmd = [sys.executable, str(SCRIPT_DIR / "golden_logmel.py"), "--board-dump", str(dump), "--bits", str(args.bits),
            "--seconds", str(args.seconds), "--training-repo", str(args.training_repo),
            "--json", str(dump.with_suffix(".json"))]
-    for wav in args.wav:
-        cmd += ["--wav", str(wav)]
+    if args.wav:
+        # One --wav with all paths: argparse replaces the list on a repeated flag.
+        cmd += ["--wav", *(str(wav) for wav in args.wav)]
     return subprocess.run(cmd, check=False).returncode
 
 

@@ -246,10 +246,16 @@ def main() -> int:
             per_clip[clip] = compare(ref, reference_int8(ref), outputs[clip])
         report[cand_name] = {"per_clip": per_clip, "overall": summarize(per_clip)}
         if "board" in candidates and cand_name == "board":
+            # A clip missing on either side fails the check instead of being skipped.
+            missing = sorted(set(refs) ^ set(outputs))
+            report[cand_name]["missing_clips"] = missing
             for host_name in [c for c in candidates if c.startswith("host-")]:
-                same = all(np.array_equal(outputs[c]["ln_q16"], candidates[host_name][c]["ln_q16"])
-                           and np.array_equal(outputs[c]["int8"], candidates[host_name][c]["int8"])
-                           for c in outputs if c in candidates[host_name])
+                host = candidates[host_name]
+                same = not missing and set(outputs) == set(host) and all(
+                    np.array_equal(outputs[c]["ln_q16"], host[c]["ln_q16"])
+                    and np.array_equal(outputs[c]["int8"], host[c]["int8"])
+                    for c in outputs
+                )
                 report[cand_name][f"bit_exact_vs_{host_name}"] = same
 
     for cand_name, data in report.items():
@@ -261,7 +267,7 @@ def main() -> int:
         print(f"  OVERALL            max_abs_err={o['max_abs_err']:.5f} mean_abs_err={o['mean_abs_err']:.6f} "
               f"int8_diff={o['int8_diff_fraction'] * 100:.3f}% int8_max_diff={o['int8_max_diff']} (n={o['values']})")
         for key, value in data.items():
-            if key.startswith("bit_exact"):
+            if key.startswith("bit_exact") or key == "missing_clips":
                 print(f"  {key}: {value}")
     if args.json:
         args.json.parent.mkdir(parents=True, exist_ok=True)
