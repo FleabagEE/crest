@@ -17,6 +17,9 @@ Turns measured latency into energy per inference and picks the best
     `P_sleep = P_listen` because the board has no whole-board sleep.
   - Nano RP2040 Connect: a board-level estimate built from component
     datasheets, to be replaced by a USB power measurement.
+  - XIAO ESP32-S3 Sense: a board-level estimate from the ESP32-S3 datasheet
+    (240 MHz, radios off) and Seeed's spec table, to be replaced by a USB
+    power measurement.
 - [`estimate_energy.py`](estimate_energy.py): reads `rp2040_summary.csv` and
   `rpi4_summary.csv` and applies
 

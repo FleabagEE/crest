@@ -177,6 +177,12 @@ class PowerFileTests(unittest.TestCase):
         for name, component in rp["components"].items():
             self.assertIn("source", component, name)
         self.assertIn("one-time", rp["components"]["nina_w102"]["uncertainty_note"].lower())
+        esp = boards["esp32s3"]
+        self.assertIn("ESTIMATE", esp["description"])
+        for key in ("P_active", "P_listen", "P_sleep"):
+            self.assertIn("low_source", esp[key])
+            self.assertIn("high_source", esp[key])
+            self.assertIn("confidence", esp[key])
 
     def test_rp2040_totals_match_components(self):
         # The stated RP2040 board watts must equal 3.3 V * sum(component mA) / efficiency for each bound.

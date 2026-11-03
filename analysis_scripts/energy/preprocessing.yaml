@@ -48,3 +48,14 @@ boards:
         1: 0.0055205
         2: 0.0115322
       source: training repo log_mel (numpy), 4 BLAS threads
+  esp32s3:
+    threads_1:
+      frame_s: 0.000624
+      window_s:
+        1: 0.062353
+        2: 0.125975
+      source: >-
+        XIAO ESP32-S3 Sense, sketches/logmel_golden, the same integer q31 front end
+        (vendored kissfft, bit-exact with the host build on 10 clips), PCM in RAM,
+        240 MHz, Wi-Fi/BT off, 2026-11-02: frame median over 98 frames; window
+        medians of 5 runs.

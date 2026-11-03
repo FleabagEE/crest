@@ -186,3 +186,55 @@ boards:
         Low (estimate). 1.18-39.61 mA at 3.3 V; RP2040 dormant/sleep, USB off.
         If the NINA module runs (high), it dominates; if held in reset (low),
         the power LED dominates.
+
+  esp32s3:
+    description: >-
+      Seeed XIAO ESP32-S3 Sense (with the camera/mic expansion board), BOARD-LEVEL
+      estimate at the USB input, 240 MHz, Wi-Fi and Bluetooth off (as benchmarked).
+      ESTIMATE from the Espressif ESP32-S3 datasheet v2.2 (chip, 3.3 V, 25 C) and
+      Seeed's XIAO ESP32S3 spec table; to be replaced by a USB power measurement.
+      The XIAO's regulator type is not sourced here, so low assumes ideal
+      conversion at 3.3 V and high assumes a linear regulator from 5 V (P = 5 V x I).
+      Espressif notes that variants with embedded PSRAM (ours) may draw more.
+    P_active:
+      watts: [0.2389, 0.586]
+      low_source: >-
+        Espressif ESP32-S3 datasheet v2.2, section 5.6.2, Table 5-9 (Modem-sleep, Wi-Fi
+        clock gated): 240 MHz, single core running 128-bit data access instructions,
+        other core idle, all peripheral clocks disabled: 72.4 mA typ. ESP-NN uses the
+        S3's 128-bit (PIE) instructions on one core. 3.3 V x 72.4 mA = 0.239 W.
+        https://www.espressif.com/sites/default/files/documentation/esp32-s3_datasheet_en.pdf
+      high_source: >-
+        Same row with all peripheral clocks enabled: 87.9 mA; + 10 mA for flash access
+        (Table 5-9 note 3); + 19.3 mA for the Sense expansion board (Seeed typical USB
+        draw 5 V@38.3 mA Sense vs 5 V@19 mA XIAO ESP32-S3). 5 V x 117.2 mA = 0.586 W.
+        https://wiki.seeedstudio.com/xiao_esp32s3_getting_started/
+      confidence: >-
+        Low-medium (estimate). The chip figures are datasheet typicals for a matching
+        instruction mix; the board overhead and regulator are the main uncertainty.
+    P_listen:
+      watts: [0.1086, 0.3345]
+      low_source: >-
+        Datasheet Table 5-9: 240 MHz WAITI (dual core idle), peripheral clocks disabled:
+        32.9 mA; 3.3 V x 32.9 mA = 0.109 W.
+      high_source: >-
+        Table 5-9: 240 MHz WAITI, peripheral clocks enabled 47.6 mA, + 19.3 mA Sense
+        board overhead (Seeed); 5 V x 66.9 mA = 0.335 W. Cross-check, inside the range:
+        Seeed Sense modem-sleep 3.8 V@44 mA = 0.167 W; Seeed Sense typical 5 V@38.3 mA
+        = 0.19 W.
+      confidence: >-
+        Low-medium (estimate). Listening also needs the PDM microphone and I2S clock,
+        not included separately.
+    P_sleep:
+      watts: [0.0076, 0.025]
+      low_source: >-
+        Seeed spec table, XIAO ESP32-S3 (base board) Light-sleep 3.8 V@2 mA = 7.6 mW.
+        (Chip-only light sleep is 240 uA, datasheet Table 5-10; an independent Qoitech
+        measurement of the base board found 0.19-0.69 mA, i.e. lower than Seeed's 2 mA.)
+      high_source: >-
+        Seeed spec table, XIAO ESP32-S3 Sense Light-sleep 5 mA (3.8 V); taken at 5 V
+        (linear regulator assumption): 25 mW. Deep sleep is not used here; on the Sense
+        it is 3 mA because of the expansion board (Seeed).
+      confidence: >-
+        Medium for the order of magnitude (several mW); the light-sleep figure depends on
+        what the expansion board draws.

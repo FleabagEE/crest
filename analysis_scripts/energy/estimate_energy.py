@@ -69,11 +69,12 @@ DEFAULT_PREPROCESSING = SCRIPT_DIR / "preprocessing.yaml"
 DESIGNS = ("inference_only", "streaming", "naive")
 DEFAULT_RP2040_CSV = REPO_ROOT / "analysis_scripts" / "rp2040_latency_bench" / "results" / "rp2040_summary.csv"
 DEFAULT_RPI4_CSV = REPO_ROOT / "analysis_scripts" / "rpi4_latency_bench" / "results" / "rpi4_summary.csv"
+DEFAULT_ESP32S3_CSV = REPO_ROOT / "analysis_scripts" / "rp2040_latency_bench" / "results" / "esp32s3_summary.csv"
 DEFAULT_RESULTS_DIR = SCRIPT_DIR / "results"
 DEFAULT_SPECS = ((1.0, 1.0), (1.0, 2.0), (2.0, 2.0), (2.0, 4.0))
 DEFAULT_MIN_ACCURACIES = (0.64, 0.67, 0.69)
 BOUNDS = ("low", "high")
-BOARD_KEYS = {"nano_rp2040_connect": "rp2040", "rpi4": "rpi4"}
+BOARD_KEYS = {"nano_rp2040_connect": "rp2040", "rpi4": "rpi4", "xiao_esp32s3": "esp32s3"}
 
 
 @dataclass(frozen=True)
@@ -350,7 +351,7 @@ def select(estimates: Sequence[Estimate], min_accuracy: float, bound: str) -> Li
 
 def pair_label(pair: Pair) -> str:
     """Short human-readable pair name."""
-    board = "RP2040" if pair.board == "rp2040" else f"Pi {pair.threads}T"
+    board = {"rp2040": "RP2040", "esp32s3": "ESP32-S3"}.get(pair.board, f"Pi {pair.threads}T")
     return f"{pair.model} @ {board}"
 
 
@@ -519,7 +520,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--power", type=Path, default=DEFAULT_POWER)
-    parser.add_argument("--csv", type=Path, nargs="+", default=[DEFAULT_RP2040_CSV, DEFAULT_RPI4_CSV])
+    parser.add_argument("--csv", type=Path, nargs="+", default=[DEFAULT_RP2040_CSV, DEFAULT_ESP32S3_CSV, DEFAULT_RPI4_CSV])
     parser.add_argument("--spec", type=_parse_spec, nargs="+", default=list(DEFAULT_SPECS),
                         help="Specs as L,S in seconds (default: 1,1 1,2 2,2 2,4).")
     parser.add_argument("--min-acc", type=float, nargs="+", default=list(DEFAULT_MIN_ACCURACIES),
