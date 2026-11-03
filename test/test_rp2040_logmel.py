@@ -59,6 +59,18 @@ class HostGoldenTests(unittest.TestCase):
                     self.assertLessEqual(stats["int8_max_diff"], 1)
                     self.assertLess(stats["int8_diff_fraction"], 0.02)
 
+    def test_vendored_kissfft_build_is_bit_exact(self):
+        # The ESP32 build (vendored kissfft, no TFLM include path) must match the Chirale-path q31 build exactly.
+        """Validate vendored kissfft bit-exactness."""
+        with tempfile.TemporaryDirectory() as tmp:
+            normal = golden_logmel.build_host(32, Path(tmp) / "normal")
+            vendored = golden_logmel.build_host(32, Path(tmp) / "vendored", vendored=True)
+            for name, pcm in golden_logmel.synthetic_clips(1.0).items():
+                a, b = golden_logmel.run_host(normal, pcm), golden_logmel.run_host(vendored, pcm)
+                with self.subTest(clip=name):
+                    self.assertTrue(np.array_equal(a["ln_q16"], b["ln_q16"]))
+                    self.assertTrue(np.array_equal(a["int8"], b["int8"]))
+
 
 if __name__ == "__main__":
     unittest.main()

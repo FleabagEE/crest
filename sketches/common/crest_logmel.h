@@ -43,6 +43,19 @@ typedef int16_t crest_fft_in_t;
 #define CREST_LOGMEL_FFT_IN_BITS 15
 #define CREST_LOGMEL_FFT_STATE_BYTES 4096
 #elif CREST_LOGMEL_FFT_BITS == 32
+#if defined(CREST_LOGMEL_VENDORED_KISSFFT)
+// Boards without the Chirale library (ESP32): the same kissfft sources, copied
+// from the pinned Chirale submodule into common/kissfft/ at staging time with
+// file-relative includes, so the arithmetic is identical to the RP2040/host
+// build (the esp32 core's own kissfft headers differ).
+#include "kissfft/kiss_fft_common.h"
+#define FIXED_POINT 32
+namespace kissfft_fixed32 {
+#include "kissfft/kiss_fft.c"
+#include "kissfft/tools/kiss_fftr.c"
+}  // namespace kissfft_fixed32
+#undef FIXED_POINT
+#else
 #include "tensorflow/lite/experimental/microfrontend/lib/kiss_fft_common.h"
 #define FIXED_POINT 32
 namespace kissfft_fixed32 {
@@ -50,6 +63,7 @@ namespace kissfft_fixed32 {
 #include "third_party/kissfft/tools/kiss_fftr.c"
 }  // namespace kissfft_fixed32
 #undef FIXED_POINT
+#endif
 namespace crest_kiss = kissfft_fixed32;
 typedef int32_t crest_fft_in_t;
 #define CREST_LOGMEL_FFT_IN_BITS 31

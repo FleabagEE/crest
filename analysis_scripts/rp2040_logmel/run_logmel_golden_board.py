@@ -4,8 +4,8 @@
 
 Stages the golden sketch with ``sketches/common`` and a generated
 ``golden_clips.h`` (the same clips ``golden_logmel.py`` uses), compiles it
-with ``CREST_LOGMEL_FFT_BITS``, uploads it through ``ArduinoNanoRP2040Device``
-(timeout + retries), captures the serial output until ``DONE``, saves it to
+with ``CREST_LOGMEL_FFT_BITS``, uploads it through the board's CREST device
+(``--board rp2040`` or ``xiao_esp32s3``; timeout + retries), captures the serial output until ``DONE``, saves it to
 ``results/board_dump_q<bits-1>_<timestamp>.txt``, prints the ``TIMING`` lines
 and the compile memory figures, then runs ``golden_logmel.py --board-dump``
 on the capture.
@@ -26,22 +26,16 @@ import serial
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
-for _path in (REPO_ROOT / "src", SCRIPT_DIR):
+for _path in (REPO_ROOT / "src", SCRIPT_DIR, REPO_ROOT / "analysis_scripts" / "rp2040_latency_bench"):
     if str(_path) not in sys.path:
         sys.path.insert(0, str(_path))
 
 from crest.microcontrollers import arduino_base  # noqa: E402
-from crest.microcontrollers.arduino_nano_rp2040 import (  # noqa: E402
-    BOARD_FQBN,
-    ArduinoNanoRP2040Device,
-    wait_for_serial_port,
-)
+from crest.microcontrollers.arduino_nano_rp2040 import wait_for_serial_port  # noqa: E402
 import golden_logmel  # noqa: E402
 
 SKETCH_DIR = REPO_ROOT / "sketches" / "logmel_golden"
-
-
-def stage(build_dir: Path, seconds: float, wavs: List[Path], training_repo: Path) -> Path:
+def stage(build_dir: Path, seconds: float, wavs: List[Path], training_repo: Path, vendored: bool = False) -> Path:
     """Stage the golden sketch; return its directory."""
     target = build_dir / "logmel_golden"
     if target.exists():
@@ -49,6 +43,8 @@ def stage(build_dir: Path, seconds: float, wavs: List[Path], training_repo: Path
     target.mkdir(parents=True)
     shutil.copyfile(SKETCH_DIR / "logmel_golden.ino", target / "logmel_golden.ino")
     shutil.copytree(REPO_ROOT / "sketches" / "common", target / "common")
+    if vendored:
+        golden_logmel.vendor_kissfft(target / "common")
     clips = golden_logmel.synthetic_clips(seconds)
     for wav in wavs:
         clips[f"wav_{wav.stem}"] = golden_logmel.wav_clip(wav, seconds, training_repo)
@@ -82,6 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--port", default="/dev/ttyACM0")
     parser.add_argument("--bits", type=int, default=32, choices=[16, 32])
+    parser.add_argument("--board", choices=("rp2040", "xiao_esp32s3"), default="rp2040")
     parser.add_argument("--seconds", type=float, default=1.0)
     parser.add_argument("--wav", type=Path, nargs="*", default=[])
     parser.add_argument("--training-repo", type=Path, default=golden_logmel.DEFAULT_TRAINING_REPO)
@@ -93,17 +90,25 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """Stage, build, flash, capture and compare."""
     args = parse_args()
-    build_dir = golden_logmel.DEFAULT_BUILD_DIR / f"golden_q{args.bits - 1}"
-    sketch = stage(build_dir, args.seconds, args.wav, args.training_repo)
-    result = arduino_base.compile_sketch(sketch_path=sketch, fqbn=BOARD_FQBN,
-                                         build_defines={"CREST_LOGMEL_FFT_BITS": args.bits})
+    from bench_boards import make_device
+
+    esp32 = args.board == "xiao_esp32s3"
+    if esp32 and args.bits != 32:
+        raise SystemExit("xiao_esp32s3 supports --bits 32 only (vendored q31 kissfft).")
+    build_dir = golden_logmel.DEFAULT_BUILD_DIR / f"golden_{args.board}_q{args.bits - 1}"
+    device = make_device(args.board, serial_port=args.port)
+    sketch = stage(build_dir, args.seconds, args.wav, args.training_repo, vendored=esp32)
+    defines = {"CREST_LOGMEL_FFT_BITS": args.bits}
+    if esp32:
+        defines["CREST_LOGMEL_VENDORED_KISSFFT"] = 1
+    result = arduino_base.compile_sketch(sketch_path=sketch, fqbn=device.spec.fqbn, build_defines=defines,
+                                         board_options=device._board_options)
     print(f"compile success={result.success} flash_bytes={result.flash_bytes} ram_bytes={result.ram_bytes}")
     if not result.success:
         print(result.log[-3000:])
         return 1
     if args.compile_only:
         return 0
-    device = ArduinoNanoRP2040Device(serial_port=args.port)
     upload = device.upload(sketch_path=sketch, build_dir=result.build_dir, serial_port=args.port)
     if not upload.success:
         print(upload.log[-2000:])
@@ -111,7 +116,8 @@ def main() -> int:
     wait_for_serial_port(args.port, 15)
     lines = capture(args.port, args.timeout_s)
     golden_logmel.DEFAULT_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-    dump = golden_logmel.DEFAULT_RESULTS_DIR / f"board_dump_q{args.bits - 1}_{datetime.now():%Y%m%d_%H%M%S}.txt"
+    prefix = "" if args.board == "rp2040" else f"{args.board}_"
+    dump = golden_logmel.DEFAULT_RESULTS_DIR / f"{prefix}board_dump_q{args.bits - 1}_{datetime.now():%Y%m%d_%H%M%S}.txt"
     dump.write_text("\n".join(lines) + "\n", encoding="utf-8")
     for line in lines:
         if line.startswith(("INFO", "TIMING", "ERROR", "DONE")):

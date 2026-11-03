@@ -16,7 +16,13 @@
 // then prints DONE. PCM for timing is copied into RAM first (as mic DMA
 // would deliver it); the dump reads clips from flash.
 #include <Arduino.h>
+#if defined(ARDUINO_ARCH_ESP32)
+// No Chirale on ESP32: crest_logmel.h uses vendored kissfft sources
+// (CREST_LOGMEL_VENDORED_KISSFFT, staged into common/kissfft/).
+#include <WiFi.h>
+#else
 #include <Chirale_TensorFlowLite.h>
+#endif
 
 #ifndef CREST_LOGMEL_FFT_BITS
 #define CREST_LOGMEL_FFT_BITS 32
@@ -112,6 +118,12 @@ void setup() {
     delay(10);
   }
   delay(500);
+#if defined(ARDUINO_ARCH_ESP32)
+  // Same measurement conditions as the latency sketch: radios off, 240 MHz.
+  WiFi.mode(WIFI_OFF);
+  btStop();
+  setCpuFrequencyMhz(240);
+#endif
   do {
     Serial.println("DUT READY");
   } while (!WaitForStart());
@@ -122,7 +134,12 @@ void setup() {
   Serial.print(" fft_state_bytes=");
   Serial.print(state_bytes);
   Serial.print(" clips=");
-  Serial.println(GOLDEN_NUM_CLIPS);
+  Serial.print(GOLDEN_NUM_CLIPS);
+#if defined(ARDUINO_ARCH_ESP32)
+  Serial.print(" cpu_mhz=");
+  Serial.print(getCpuFrequencyMhz());
+#endif
+  Serial.println();
   if (state_bytes == 0) {
     Serial.println("ERROR fft state buffer too small");
     return;

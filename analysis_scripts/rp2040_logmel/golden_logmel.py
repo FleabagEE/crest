@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -53,6 +55,49 @@ SAMPLE_RATE = 16000
 # Input quantization shared by all DSCNN_64_SC int8 exports (1s and 2s).
 INPUT_SCALE = 0.07683266699314117
 INPUT_ZERO_POINT = 52
+
+
+CHIRALE_SRC = TFLM_SRC
+# kissfft files to vendor for boards without Chirale, with their includes
+# rewritten from "third_party/kissfft/..." to file-relative paths.
+KISSFFT_VENDOR = {
+    "kiss_fft.c": ("third_party/kissfft/kiss_fft.c", {"third_party/kissfft/_kiss_fft_guts.h": "_kiss_fft_guts.h"}),
+    "_kiss_fft_guts.h": ("third_party/kissfft/_kiss_fft_guts.h", {"third_party/kissfft/kiss_fft.h": "kiss_fft.h"}),
+    "kiss_fft.h": ("third_party/kissfft/kiss_fft.h", {}),
+    "tools/kiss_fftr.c": ("third_party/kissfft/tools/kiss_fftr.c", {
+        "third_party/kissfft/tools/kiss_fftr.h": "kiss_fftr.h",
+        "third_party/kissfft/_kiss_fft_guts.h": "../_kiss_fft_guts.h",
+    }),
+    "tools/kiss_fftr.h": ("third_party/kissfft/tools/kiss_fftr.h", {"third_party/kissfft/kiss_fft.h": "../kiss_fft.h"}),
+    "kiss_fft_common.h": ("tensorflow/lite/experimental/microfrontend/lib/kiss_fft_common.h", {}),
+    "COPYING": ("third_party/kissfft/COPYING", {}),
+}
+
+
+def vendor_kissfft(common_dir: Path, source_root: Path = CHIRALE_SRC) -> Path:
+    """Copy kissfft from the Chirale submodule into ``common_dir/kissfft``.
+
+    Includes are rewritten to file-relative paths so the copies are used even
+    when the board's core ships its own (different) kissfft headers.
+
+    Returns
+    -------
+    Path
+        The ``kissfft`` directory.
+    """
+    target = common_dir / "kissfft"
+    for name, (relative, replacements) in KISSFFT_VENDOR.items():
+        text = (source_root / relative).read_text(encoding="utf-8")
+        for old, new in replacements.items():
+            if old not in text:
+                raise ValueError(f"{relative}: expected include {old!r}")
+            text = text.replace(old, new)
+        if re.search(r'^\s*#\s*include\s*"third_party/kissfft', text, re.MULTILINE):
+            raise ValueError(f"{relative}: unrewritten kissfft include")
+        out = target / name
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(text, encoding="utf-8")
+    return target
 
 
 def inv_scale_q24(scale: float = INPUT_SCALE) -> int:
@@ -107,14 +152,32 @@ def reference_int8(log_mel: np.ndarray) -> np.ndarray:
     return np.clip(np.rint(value / INPUT_SCALE) + INPUT_ZERO_POINT, -128, 127).astype(np.int8)
 
 
-def build_host(bits: int, build_dir: Path) -> Path:
-    """Compile the host harness for a FFT width; return the binary path."""
+def build_host(bits: int, build_dir: Path, vendored: bool = False) -> Path:
+    """Compile the host harness for a FFT width; return the binary path.
+
+    ``vendored`` builds like a board without Chirale (ESP32): a copy of
+    ``sketches/common`` with ``vendor_kissfft`` applied and no TFLM include
+    path, so only the vendored kissfft sources can be used.
+    """
     build_dir.mkdir(parents=True, exist_ok=True)
-    binary = build_dir / f"host_logmel_q{bits - 1}"
+    binary = build_dir / f"host_logmel_q{bits - 1}{'_vendored' if vendored else ''}"
     sources = [str(SCRIPT_DIR / "host_logmel.cpp")]
-    if bits == 16:
-        sources.append(str(TFLM_SRC / "tensorflow" / "lite" / "experimental" / "microfrontend" / "lib" / "kiss_fft_int16.cpp"))
-    cmd = ["g++", "-O2", "-std=c++17", f"-DCREST_LOGMEL_FFT_BITS={bits}", f"-I{COMMON_DIR}", f"-I{TFLM_SRC}",
+    if vendored:
+        if bits != 32:
+            raise ValueError("vendored kissfft supports q31 only")
+        common = build_dir / "vendored_common"
+        if common.exists():
+            shutil.rmtree(common)
+        shutil.copytree(COMMON_DIR, common)
+        vendor_kissfft(common)
+        includes = [f"-I{common}"]
+        extra = ["-DCREST_LOGMEL_VENDORED_KISSFFT=1"]
+    else:
+        includes = [f"-I{COMMON_DIR}", f"-I{TFLM_SRC}"]
+        extra = []
+        if bits == 16:
+            sources.append(str(TFLM_SRC / "tensorflow" / "lite" / "experimental" / "microfrontend" / "lib" / "kiss_fft_int16.cpp"))
+    cmd = ["g++", "-O2", "-std=c++17", f"-DCREST_LOGMEL_FFT_BITS={bits}", *extra, *includes,
            *sources, "-o", str(binary)]
     subprocess.run(cmd, check=True)
     return binary
