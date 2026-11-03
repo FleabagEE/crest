@@ -33,6 +33,11 @@ def _registry_entries() -> dict[str, tuple[str, str, str]]:
             "ArduinoNanoRP2040Device",
             "BOARD_DEFAULT_SPEC",
         ),
+        "XIAO_ESP32S3_SENSE": (
+            "crest.microcontrollers.xiao_esp32s3",
+            "XiaoESP32S3Device",
+            "BOARD_DEFAULT_SPEC",
+        ),
         "RASPBERRY_PI_4": (
             "crest.microcontrollers.raspberry_pi4",
             "RaspberryPi4Device",
@@ -256,6 +261,24 @@ def resolve_device_options(
             options["latency_budget_ms"] = shared_latency_budget_ms
         return options or None
 
+    if normalized_name == "XIAO_ESP32S3_SENSE":
+        from .xiao_esp32s3 import ESP32S3_OPTION_KEYS, resolve_esp32s3_options
+
+        esp32_cfg = _cfg_get(device_config, "esp32s3", None)
+        # Same shape as device.rp2040: latency-only knobs plus arena placement.
+        options = {}
+        if esp32_cfg is not None:
+            for key in ESP32S3_OPTION_KEYS:
+                value = _cfg_get(esp32_cfg, key, None)
+                if value not in (None, ""):
+                    options[key] = list(value) if key == "arena_sizes_kb" else value
+        resolve_esp32s3_options(options)
+        if shared_runtime_mode not in (None, ""):
+            options["runtime_mode"] = shared_runtime_mode
+        if shared_latency_budget_ms not in (None, ""):
+            options["latency_budget_ms"] = shared_latency_budget_ms
+        return options or None
+
     if normalized_name == "RASPBERRY_PI_4":
         from .raspberry_pi4 import RPI4_OPTION_KEYS, resolve_rpi4_options
 
@@ -372,6 +395,11 @@ def __getattr__(name: str) -> Any:
             "crest.microcontrollers.arduino_portenta_h7",
             "ArduinoPortentaH7Device",
         )
+    if name == "XiaoESP32S3Device":
+        return _load_symbol(
+            "crest.microcontrollers.xiao_esp32s3",
+            "XiaoESP32S3Device",
+        )
     if name == "RaspberryPi4Device":
         return _load_symbol(
             "crest.microcontrollers.raspberry_pi4",
@@ -391,6 +419,7 @@ __all__ = [
     "ArduinoPortentaH7Device",
     "RaspberryPi4Device",
     "STM32NucleoN657X0QDevice",
+    "XiaoESP32S3Device",
     "get_device",
     "list_device_specs",
     "resolve_device_options",

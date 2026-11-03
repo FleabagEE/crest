@@ -58,7 +58,7 @@ def core_version() -> str:
     return f"arduino:mbed_nano@{versions[-1]}" if versions else "unknown"
 
 
-def pick_result(model: str, results: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def pick_result(model: str, results: List[Dict[str, Any]], board_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Choose the result for one model.
 
     Parameters
@@ -73,7 +73,11 @@ def pick_result(model: str, results: List[Dict[str, Any]]) -> Optional[Dict[str,
     dict[str, Any] | None
         Newest ``ok`` full run, else newest ``ok`` run, else newest run.
     """
-    mine = sorted((r for r in results if r.get("model") == model), key=lambda r: Path(r["path"]).stat().st_mtime)
+    # Boards share the results directory and model names, so filter by board too.
+    mine = sorted(
+        (r for r in results if r.get("model") == model and (board_id is None or r.get("board") == board_id)),
+        key=lambda r: Path(r["path"]).stat().st_mtime,
+    )
     ok = [r for r in mine if r.get("status") == "ok"]
     full = [r for r in ok if "_full_" in Path(r["path"]).name]
     for group in (full, ok, mine):
@@ -139,7 +143,9 @@ def build_row(candidate: Path, result: Optional[Dict[str, Any]], clock_hz: int, 
                 mac_per_s=round(analysis["total_macs"] / (median_us / 1e6)),
                 fits_stride=median_us / 1e6 < stride_s,
             )
-    return {column: row.get(column, "") for column in COLUMNS}
+    if result is not None and result.get("arena_memory"):
+        row["memory_location"] = result["arena_memory"]
+    return {column: row.get(column, "") for column in COLUMNS + ["memory_location"]}
 
 
 def parse_args() -> argparse.Namespace:
@@ -153,8 +159,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--candidate-root", type=Path, default=DEFAULT_CANDIDATE_ROOT)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
-    parser.add_argument("--output", type=Path, default=DEFAULT_RESULTS_DIR / "rp2040_summary.csv")
-    parser.add_argument("--clock-hz", type=int, default=DEFAULT_CLOCK_HZ)
+    parser.add_argument("--output", type=Path, default=None,
+                        help="Default: results/rp2040_summary.csv or results/esp32s3_summary.csv.")
+    parser.add_argument("--clock-hz", type=int, default=None, help="Default: the board's clock.")
+    parser.add_argument("--board", choices=("rp2040", "xiao_esp32s3"), default="rp2040",
+                        help="xiao_esp32s3 adds a memory_location column (where the tensor arena lived).")
     parser.add_argument("--models", nargs="*", default=None, help="Candidate names, in row order (default: all).")
     return parser.parse_args()
 
@@ -173,11 +182,19 @@ def main() -> int:
         candidates = [args.candidate_root / name for name in args.models]
     else:
         candidates = sorted(p for p in args.candidate_root.iterdir() if (p / "candidate.json").exists())
-    core = core_version()
-    rows = [build_row(c, pick_result(c.name, results), args.clock_hz, core) for c in candidates]
+    from bench_boards import BOARDS
+
+    board = BOARDS[args.board]
+    core = core_version() if args.board == "rp2040" else board.core_version
+    clock_hz = args.clock_hz or board.clock_hz
+    columns = COLUMNS if args.board == "rp2040" else COLUMNS + ["memory_location"]
+    if args.output is None:
+        args.output = DEFAULT_RESULTS_DIR / ("rp2040_summary.csv" if args.board == "rp2040" else "esp32s3_summary.csv")
+    rows = [build_row(c, pick_result(c.name, results, board.board_id), clock_hz, core) for c in candidates]
+    rows = [{k: (board.board_id if k == "board" else r.get(k, "")) for k in columns} for r in rows]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=COLUMNS)
+        writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
     for row in rows:

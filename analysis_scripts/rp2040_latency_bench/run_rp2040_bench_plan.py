@@ -44,6 +44,10 @@ from analyze_tflite_memory import (  # noqa: E402
     recommended_arena_kb,
 )
 from run_rp2040_latency_bench import DEFAULT_RESULTS_DIR, parse_results_file  # noqa: E402
+from bench_boards import BOARDS, make_device  # noqa: E402
+
+# A PSRAM arena (xiao_esp32s3) is not limited by the internal-SRAM RAM cap.
+PSRAM_LARGEST_ARENA_KB = 4096
 
 BENCH_SCRIPT = SCRIPT_DIR / "run_rp2040_latency_bench.py"
 PESSIMISTIC_MAC_PER_S = 1.0e6
@@ -70,6 +74,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--probe-runs", type=int, default=10)
     parser.add_argument("--probe-warmup", type=int, default=2)
     parser.add_argument("--skip-done", action="store_true", help="Skip candidates with an ok full-run file.")
+    parser.add_argument("--board", choices=sorted(BOARDS), default="rp2040")
+    parser.add_argument("--arena-memory", choices=("internal_sram", "psram"), default="internal_sram",
+                        help="xiao_esp32s3 only: where the tensor arena lives.")
     return parser.parse_args()
 
 
@@ -130,7 +137,8 @@ def run_phase(
     """
     while True:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output = args.results_dir / f"{candidate.name}_{phase}_a{arena_kb}_{stamp}.txt"
+        prefix = "" if args.board == "rp2040" else f"{args.board}_"
+        output = args.results_dir / f"{prefix}{candidate.name}_{phase}_a{arena_kb}_{stamp}.txt"
         print(
             f"[{candidate.name}] {phase}: arena={arena_kb} KiB runs={runs} warmup={warmup} timeout={timeout_s} s",
             flush=True,
@@ -146,6 +154,8 @@ def run_phase(
             "--warmup", str(warmup),
             "--serial-timeout-s", str(timeout_s),
             "--output", str(output),
+            "--board", args.board,
+            "--arena-memory", args.arena_memory,
         ]
         subprocess.run(cmd, cwd=REPO_ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         result = parse_results_file(output) if output.exists() else {"status": "missing", "path": str(output)}
@@ -161,7 +171,7 @@ def run_phase(
         return result
 
 
-def done_full_run(candidate: Path, results_dir: Path) -> Optional[Path]:
+def done_full_run(candidate: Path, results_dir: Path, prefix: str = "") -> Optional[Path]:
     """Return an existing ``ok`` full-run file for the candidate, if any.
 
     Parameters
@@ -176,7 +186,7 @@ def done_full_run(candidate: Path, results_dir: Path) -> Optional[Path]:
     Path | None
         Newest matching file.
     """
-    for path in sorted(results_dir.glob(f"{candidate.name}_full_a*.txt"), reverse=True):
+    for path in sorted(results_dir.glob(f"{prefix}{candidate.name}_full_a*.txt"), reverse=True):
         if parse_results_file(path).get("status") == "ok":
             return path
     return None
@@ -191,19 +201,23 @@ def main() -> int:
         ``0`` when every candidate finished with an ``ok`` full run.
     """
     args = parse_args()
-    from crest.microcontrollers.arduino_nano_rp2040 import BOARD_DEFAULT_SPEC
-
-    ram_cap = int(BOARD_DEFAULT_SPEC.max_ram_bytes)
-    largest_arena_kb = (ram_cap - DEFAULT_STATIC_RAM_BASE) // 1024
+    board = BOARDS[args.board]
+    ram_cap = int(make_device(args.board).spec.max_ram_bytes)
+    static_base = board.static_ram_base or DEFAULT_STATIC_RAM_BASE
+    largest_arena_kb = (ram_cap - static_base) // 1024
+    if args.arena_memory == "psram":
+        largest_arena_kb = PSRAM_LARGEST_ARENA_KB
     args.results_dir.mkdir(parents=True, exist_ok=True)
     failures = 0
     for candidate in (path.resolve() for path in args.candidates):
-        if args.skip_done and (existing := done_full_run(candidate, args.results_dir)):
+        prefix = "" if args.board == "rp2040" else f"{args.board}_"
+        if args.skip_done and (existing := done_full_run(candidate, args.results_dir, prefix)):
             print(f"[{candidate.name}] skipped: already done ({existing.name})", flush=True)
             continue
         info = analyze_tflite(candidate)
         arena_kb = args.arena_kb or recommended_arena_kb(
-            info["arena_estimate_bytes"], static_ram_base=DEFAULT_STATIC_RAM_BASE, ram_cap=ram_cap
+            info["arena_estimate_bytes"], static_ram_base=static_base,
+            ram_cap=ram_cap if args.arena_memory == "internal_sram" else static_base + PSRAM_LARGEST_ARENA_KB * 1024,
         )
         probe_timeout = max(
             60, math.ceil((args.probe_warmup + args.probe_runs) * info["total_macs"] / PESSIMISTIC_MAC_PER_S * 1.5)

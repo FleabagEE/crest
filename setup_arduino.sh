@@ -47,6 +47,13 @@ echo "Updating core index and installing Arduino mbed cores (nano + portenta) ..
 "$BIN_DIR/arduino-cli" core update-index --config-file "$CONFIG_FILE"
 "$BIN_DIR/arduino-cli" core install arduino:mbed_nano --config-file "$CONFIG_FILE"
 "$BIN_DIR/arduino-cli" core install arduino:mbed_portenta --config-file "$CONFIG_FILE"
+# Optional: esp32 core for the XIAO ESP32-S3 Sense backend (large download).
+# Its prebuilt esp-tflite-micro + ESP-NN are used instead of Chirale on ESP32.
+if [[ "${CREST_INSTALL_ESP32:-0}" == "1" ]]; then
+  ESP32_INDEX_URL="https://espressif.github.io/arduino-esp32/package_esp32_index.json"
+  "$BIN_DIR/arduino-cli" core update-index --config-file "$CONFIG_FILE" --additional-urls "$ESP32_INDEX_URL"
+  "$BIN_DIR/arduino-cli" core install esp32:esp32@3.3.12 --config-file "$CONFIG_FILE" --additional-urls "$ESP32_INDEX_URL"
+fi
 echo "Installing required Arduino libraries ..."
 "$BIN_DIR/arduino-cli" lib install "Adafruit INA228 Library" --config-file "$CONFIG_FILE"
 

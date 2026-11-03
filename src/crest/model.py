@@ -68,6 +68,7 @@ BOARD_QUANTIZATION_CAPABILITIES = {
     "ARDUINO_NANO_33_BLE_SENSE": {"float", "int8_ptq"},
     "ARDUINO_NANO_RP2040_CONNECT": {"float", "int8_ptq"},
     "RASPBERRY_PI_4": {"float", "int8_ptq"},
+    "XIAO_ESP32S3_SENSE": {"float", "int8_ptq"},
 }
 VALID_DERIVED_METRIC_TYPES = {"add", "energy-budget-from-power"}
 VALID_TERM_TYPES = {"weighted", "normalized-weighted", "boundary", "target"}
@@ -2464,17 +2465,17 @@ def load_config(
         if bool(device.get("hil", False)) and not _cfg_get(device.get("rpi4", None), "host", None):
             raise ValueError("RASPBERRY_PI_4 with device.hil: true requires device.rpi4.host.")
 
-    if normalized_device_name == "ARDUINO_NANO_RP2040_CONNECT":
-        # This target is latency/memory-only: no harness, INA228 or cadenced pass.
+    if normalized_device_name in {"ARDUINO_NANO_RP2040_CONNECT", "XIAO_ESP32S3_SENSE"}:
+        # These targets are latency/memory-only: no harness, INA228 or cadenced pass.
         if device.runtime_mode == "cadenced":
-            raise ValueError("ARDUINO_NANO_RP2040_CONNECT only supports device.runtime_mode='back_to_back'.")
+            raise ValueError(f"{normalized_device_name} only supports device.runtime_mode='back_to_back'.")
         if bool(training.get("energy_aware", False)):
             raise ValueError(
-                "ARDUINO_NANO_RP2040_CONNECT is latency/memory-only; set training.energy_aware: false."
+                f"{normalized_device_name} is latency/memory-only; set training.energy_aware: false."
             )
         if device.get("harness_serial_port", None) not in (None, ""):
             raise ValueError(
-                "ARDUINO_NANO_RP2040_CONNECT has no measurement harness; remove device.harness_serial_port."
+                f"{normalized_device_name} has no measurement harness; remove device.harness_serial_port."
             )
 
     measured_inference_runs_raw = device.get("measured_inference_runs", 10)

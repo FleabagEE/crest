@@ -154,6 +154,11 @@ Per-backend nested blocks include:
 
 - `device.portenta.*`
 - `device.stm32.*`
+- `device.esp32s3.*` (XIAO ESP32-S3 Sense, latency/memory only):
+  `arena_sizes_kb`, `arena_memory` (`internal_sram` or `psram`), `cpu_mhz`
+  (80/160/240, default 240), `warmup_runs`, `upload_timeout_s`,
+  `upload_retries`, `port_wait_s`. See
+  [`nas_config_audio_esp32s3.yaml`](nas_config_audio_esp32s3.yaml).
 - `device.rp2040.*` (Nano RP2040 Connect, latency/memory only):
   `arena_sizes_kb` (ascending arena sweep in KiB), `warmup_runs` (default 5),
   `upload_timeout_s` (default 90), `upload_retries` (default 2), and

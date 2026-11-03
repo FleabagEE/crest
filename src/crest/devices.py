@@ -960,14 +960,14 @@ def _sync_arduino_sketch_variant_for_config(
     energy_aware = bool(_cfg_get(training_cfg, "energy_aware", False))
     input_mode = str(_cfg_get(training_cfg, "input_mode", "uniform")).strip().lower()
     header_name: str | None = None
-    if normalized_device_name == "ARDUINO_NANO_RP2040_CONNECT":
-        # Latency/memory-only target: always stage the per-run latency sketch,
+    if normalized_device_name in {"ARDUINO_NANO_RP2040_CONNECT", "XIAO_ESP32S3_SENSE"}:
+        # Latency/memory-only targets: always stage the per-run latency sketch,
         # whatever training.energy_aware says (config validation rejects it).
         if normalized_runtime_phase == "cadenced":
-            raise ValueError("ARDUINO_NANO_RP2040_CONNECT does not support the cadenced runtime phase.")
+            raise ValueError(f"{normalized_device_name} does not support the cadenced runtime phase.")
         if input_mode != "uniform":
             raise ValueError(
-                "ARDUINO_NANO_RP2040_CONNECT only supports training.input_mode='uniform'."
+                f"{normalized_device_name} only supports training.input_mode='uniform'."
             )
         variant_dir = sketch_variants_dir
         variant_name = "crest_inference_latency.ino"

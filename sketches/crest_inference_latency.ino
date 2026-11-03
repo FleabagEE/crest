@@ -14,7 +14,16 @@
 //   - prints one key=value line per run, then the standard CREST summary
 //     (`runs:`, placeholder power keys, `timer output:`) for the host parser.
 #include <Arduino.h>
+#if defined(ARDUINO_ARCH_ESP32)
+// ESP32: TFLM comes prebuilt with the esp32 core (esp-tflite-micro, linked
+// with ESP-NN's ESP32-S3-optimized kernels). Chirale is deliberately not
+// included: its kernels would be linked first and replace ESP-NN.
+#include <WiFi.h>
+#include "esp_heap_caps.h"
+#include "esp_memory_utils.h"
+#else
 #include <Chirale_TensorFlowLite.h>
+#endif
 #include <cstdlib>
 #include <cmath>
 
@@ -33,7 +42,11 @@
 #error "crest_inference_latency.ino is latency-only; build without CREST_USE_INA228."
 #endif
 
+#if defined(ARDUINO_ARCH_ESP32)
+#include "tensorflow/lite/micro/micro_mutable_op_resolver.h"
+#else
 #include "tensorflow/lite/micro/all_ops_resolver.h"
+#endif
 #include "tensorflow/lite/micro/tflite_bridge/micro_error_reporter.h"
 #include "tensorflow/lite/micro/micro_interpreter.h"
 #include "tensorflow/lite/micro/system_setup.h"
@@ -56,7 +69,25 @@
 // Identifiers echoed on every telemetry line. The host rewrites
 // CREST_MODEL_ID with the candidate directory name.
 #ifndef CREST_BOARD_ID
+#if defined(ARDUINO_ARCH_ESP32)
+#define CREST_BOARD_ID "xiao_esp32s3"
+#else
 #define CREST_BOARD_ID "nano_rp2040_connect"
+#endif
+#endif
+
+// ESP32 only: place the tensor arena in PSRAM (heap_caps) instead of a
+// static array in internal SRAM. Needs the board's PSRAM enabled.
+#ifndef CREST_ARENA_IN_PSRAM
+#define CREST_ARENA_IN_PSRAM 0
+#endif
+#if CREST_ARENA_IN_PSRAM && !defined(ARDUINO_ARCH_ESP32)
+#error "CREST_ARENA_IN_PSRAM is only supported on ESP32 boards."
+#endif
+
+// ESP32 only: CPU clock set in setup() and reported in the env line.
+#ifndef CREST_ESP32_CPU_MHZ
+#define CREST_ESP32_CPU_MHZ 240
 #endif
 
 #ifndef CREST_MODEL_ID
@@ -100,7 +131,11 @@ static_assert(kTimedRuns > 0, "CREST_INFERENCE_RUNS must be >= 1");
 static_assert(kWarmupRuns >= 0, "CREST_WARMUP_RUNS must be >= 0");
 
 // CMSIS-NN requires 16-byte alignment.
+#if CREST_ARENA_IN_PSRAM
+uint8_t* tensor_arena = nullptr;  // allocated from PSRAM in setup()
+#else
 alignas(16) uint8_t tensor_arena[kTensorArenaSize];
+#endif
 // Per-run Invoke() durations, filled inside the timed window and printed after.
 uint32_t invoke_us[kTimedRuns];
 
@@ -179,7 +214,7 @@ bool FillInputTensor() {
         input->data.f[offset] = value;
       } else if (input->type == kTfLiteInt8) {
         int32_t quantized = static_cast<int32_t>(roundf(value / scale)) + zero_point;
-        quantized = min(127, max(-128, quantized));
+        quantized = quantized > 127 ? 127 : (quantized < -128 ? -128 : quantized);
         input->data.int8[offset] = static_cast<int8_t>(quantized);
       } else {
         return false;
@@ -206,11 +241,35 @@ void setup() {
 #endif
   delay(1000);
 
+#if defined(ARDUINO_ARCH_ESP32)
+  // Radios off for measurement; fixed CPU clock.
+  WiFi.mode(WIFI_OFF);
+  btStop();
+  setCpuFrequencyMhz(CREST_ESP32_CPU_MHZ);
+#endif
+#if CREST_ARENA_IN_PSRAM
+  tensor_arena = static_cast<uint8_t*>(
+      heap_caps_aligned_alloc(16, kTensorArenaSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+#endif
+
   tflite::InitializeTarget();
   error_reporter = tflite::GetMicroErrorReporter();
   model = tflite::GetModel(g_model);
 
+#if defined(ARDUINO_ARCH_ESP32)
+  // Every op used by the CREST DS-CNN exports (no AllOpsResolver in this TFLM).
+  static tflite::MicroMutableOpResolver<8> resolver;
+  resolver.AddConv2D();
+  resolver.AddDepthwiseConv2D();
+  resolver.AddFullyConnected();
+  resolver.AddMean();
+  resolver.AddPack();
+  resolver.AddReshape();
+  resolver.AddShape();
+  resolver.AddStridedSlice();
+#else
   static tflite::AllOpsResolver resolver;
+#endif
   static tflite::MicroInterpreter static_interpreter(
       model, resolver, tensor_arena, kTensorArenaSize, /*resource_variables=*/nullptr,
       /*profiler=*/nullptr);
@@ -221,6 +280,11 @@ void setup() {
     Serial.println(CREST_DUT_READY);
   }
 
+#if CREST_ARENA_IN_PSRAM
+  if (tensor_arena == nullptr) {
+    ReportInfeasibleAndHalt(0, "psram_alloc_failed");
+  }
+#endif
   if (model->version() != TFLITE_SCHEMA_VERSION) {
     ReportInfeasibleAndHalt(0, "schema_mismatch");
   }
@@ -274,6 +338,24 @@ void setup() {
   // the BLE33 sketch, the mean excludes the warm-up runs.
   const float latency_s =
       (static_cast<float>(total_us) / runs_completed) / 1000000.0f;
+#if defined(ARDUINO_ARCH_ESP32)
+  // Measurement environment (after the timed window): clock, radios, and
+  // where the arena actually lives (address range checked by the IDF).
+  Serial.print("env cpu_mhz=");
+  Serial.print(getCpuFrequencyMhz());
+  Serial.print(" wifi_mode=");
+  Serial.print(static_cast<int>(WiFi.getMode()));
+  Serial.print(" bt_started=");
+  Serial.print(btStarted() ? 1 : 0);
+  Serial.print(" arena_memory=");
+  Serial.print(esp_ptr_external_ram(tensor_arena) ? "psram" : "internal_sram");
+  Serial.print(" arena_addr=0x");
+  Serial.print(reinterpret_cast<uintptr_t>(tensor_arena), HEX);
+  Serial.print(" psram_bytes=");
+  Serial.print(ESP.getPsramSize());
+  Serial.print(" free_internal_bytes=");
+  Serial.println(static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)));
+#endif
   Serial.print("runs: ");
   Serial.println(runs_completed);
   crest_power::EmitPowerTelemetry(1, latency_s, runs_completed,

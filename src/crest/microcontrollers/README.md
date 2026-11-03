@@ -54,6 +54,7 @@ the CREST HIL harness and INA228 telemetry path.
 - [Runtime Measurement Notes](#runtime-measurement-notes)
 - [Nano RP2040 Connect](#nano-rp2040-connect)
 - [Raspberry Pi 4](#raspberry-pi-4)
+- [XIAO ESP32-S3 Sense](#xiao-esp32-s3-sense)
 - [Test Plan](#test-plan)
 - [Contributor Checklist](#contributor-checklist)
 - [Definition Of Done](#definition-of-done)
@@ -787,6 +788,39 @@ Requirements on the Pi:
 
 Bench tool:
 [`../../../analysis_scripts/rpi4_latency_bench/run_rpi4_latency_bench.py`](../../../analysis_scripts/rpi4_latency_bench/run_rpi4_latency_bench.py).
+
+## XIAO ESP32-S3 Sense
+
+`XIAO_ESP32S3_SENSE` ([`xiao_esp32s3.py`](xiao_esp32s3.py)) mirrors the Nano
+RP2040 Connect backend: the same `ArduinoDevice` flow, the same staged
+`crest_inference_latency.ino`, and latency/memory only.
+
+1. Core and FQBN: `esp32:esp32@3.3.12`, FQBN `esp32:esp32:XIAO_ESP32S3`.
+   Install with `CREST_INSTALL_ESP32=1 make arduino-setup` (no sudo).
+2. TFLM: the core's prebuilt `esp-tflite-micro`, linked with ESP-NN. Its
+   conv, depthwise-conv and fully-connected kernels call the
+   `esp_nn_*_esp32s3` routines (verified in the linked ELF). The sketch does
+   **not** include Chirale on ESP32; otherwise Chirale's CMSIS-NN-generic
+   kernels would be linked instead. This TFLM has no `AllOpsResolver`, so the
+   sketch registers the 8 ops the DS-CNN exports use in a
+   `MicroMutableOpResolver`.
+3. Board options are pinned in the backend:
+   - `USBMode=hwcdc`: the app and the ROM bootloader both use the
+     USB-Serial/JTAG device `303a:1001`, so the VID:PID does not change
+     during uploads, and one usbipd bus-ID binding is enough;
+   - `CPUFreq=240`, `PartitionScheme=default_8MB`, `DebugLevel=none`;
+   - `PSRAM` is `disabled`, or `opi` for `arena_memory: psram`.
+4. The sketch turns Wi-Fi (`WIFI_OFF`) and Bluetooth (`btStop()`) off and
+   sets the CPU clock. After the timed runs it prints an `env` line: clock,
+   radio state, and arena address/placement checked with
+   `esp_ptr_external_ram`.
+5. `device.esp32s3.arena_memory: psram` allocates the arena with
+   `heap_caps_aligned_alloc(MALLOC_CAP_SPIRAM)`, so it is not counted in the
+   compile's static RAM.
+
+Bench: `analysis_scripts/rp2040_latency_bench/*.py --board xiao_esp32s3`;
+summary: `summarize_rp2040_results.py --board xiao_esp32s3` →
+`results/esp32s3_summary.csv`, which adds a `memory_location` column.
 
 ## Test Plan
 

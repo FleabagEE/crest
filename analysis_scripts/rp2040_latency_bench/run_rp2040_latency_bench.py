@@ -34,6 +34,11 @@ from crest.microcontrollers.arduino_nano_rp2040 import (  # noqa: E402
     ArduinoNanoRP2040Device,
     parse_run_lines,
 )
+from crest.microcontrollers.xiao_esp32s3 import parse_env_line  # noqa: E402
+
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from bench_boards import BOARDS, make_device  # noqa: E402
 
 DEFAULT_RESULTS_DIR = SCRIPT_DIR / "results"
 
@@ -61,6 +66,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--serial-timeout-s", type=float, default=120.0)
     parser.add_argument("--dut-ready-timeout-s", type=float, default=12.0)
     parser.add_argument("--upload-retries", type=int, default=2)
+    parser.add_argument("--board", choices=sorted(BOARDS), default="rp2040",
+                        help="Target board (default rp2040; xiao_esp32s3 for the XIAO ESP32-S3 Sense).")
+    parser.add_argument("--arena-memory", choices=("internal_sram", "psram"), default="internal_sram",
+                        help="xiao_esp32s3 only: where the tensor arena lives.")
     parser.add_argument("--compile-only", action="store_true", help="Stop after compile (no board needed).")
     parser.add_argument("--output", type=Path, default=None, help="Results file path.")
     return parser.parse_args()
@@ -86,7 +95,7 @@ def percentile_nearest_rank(values: Sequence[int], pct: float) -> int:
     return ordered[rank - 1]
 
 
-def infeasible_line(model_id: str, reason: str, arena_bytes: int) -> str:
+def infeasible_line(model_id: str, reason: str, arena_bytes: int, board_id: str = BOARD_ID) -> str:
     """Format a host-side infeasible line in the device telemetry format.
 
     Parameters
@@ -104,7 +113,7 @@ def infeasible_line(model_id: str, reason: str, arena_bytes: int) -> str:
         Telemetry-formatted line.
     """
     return (
-        f"board={BOARD_ID} model={model_id} run=0 invoke_us=-1 preprocess_us=-1 "
+        f"board={board_id} model={model_id} run=0 invoke_us=-1 preprocess_us=-1 "
         f"arena_used_bytes=-1 status=infeasible reason={reason} arena_bytes={arena_bytes}"
     )
 
@@ -197,7 +206,7 @@ def run_attempt(
         overflow = "ram"
     if overflow is not None or not compile_result.success:
         reason = f"{overflow}_overflow" if overflow else "compile_failed"
-        summary.update(status="infeasible", reason=reason, infeasible_line=infeasible_line(model_id, reason, arena_bytes))
+        summary.update(status="infeasible", reason=reason, infeasible_line=infeasible_line(model_id, reason, arena_bytes, BOARDS[args.board].board_id))
         return summary
     if args.compile_only:
         summary.update(status="compiled", reason=None)
@@ -209,7 +218,7 @@ def run_attempt(
     summary["upload_log"] = upload_result.log
     summary["upload_s"] = round(time.monotonic() - started, 1)
     if not upload_result.success:
-        summary.update(status="infeasible", reason="upload_failed", infeasible_line=infeasible_line(model_id, "upload_failed", arena_bytes))
+        summary.update(status="infeasible", reason="upload_failed", infeasible_line=infeasible_line(model_id, "upload_failed", arena_bytes, BOARDS[args.board].board_id))
         return summary
 
     print(f"[arena {arena_kb} KiB] measuring ({args.warmup} warm-up + {args.runs} timed runs) ...", flush=True)
@@ -224,6 +233,7 @@ def run_attempt(
     summary["serial_log"] = list(measure_result.serial_log)
     summary["records"] = records
     summary["latency_s"] = measure_result.latency_s
+    summary["env"] = parse_env_line(measure_result.serial_log)
     ok_records = [record for record in records if record.get("status") == "ok"]
     if measure_result.latency_s is not None and ok_records:
         summary.update(status="ok", reason=None)
@@ -232,9 +242,9 @@ def run_attempt(
     if device_infeasible:
         summary.update(status="infeasible", reason=device_infeasible[0].get("reason"), infeasible_line=device_infeasible[0]["raw"])
     elif measure_result.arena_error_line:
-        summary.update(status="infeasible", reason="arena_too_small", infeasible_line=infeasible_line(model_id, "arena_too_small", arena_bytes))
+        summary.update(status="infeasible", reason="arena_too_small", infeasible_line=infeasible_line(model_id, "arena_too_small", arena_bytes, BOARDS[args.board].board_id))
     else:
-        summary.update(status="infeasible", reason="timeout_no_telemetry", infeasible_line=infeasible_line(model_id, "timeout_no_telemetry", arena_bytes))
+        summary.update(status="infeasible", reason="timeout_no_telemetry", infeasible_line=infeasible_line(model_id, "timeout_no_telemetry", arena_bytes, BOARDS[args.board].board_id))
     return summary
 
 
@@ -252,10 +262,11 @@ def write_results(path: Path, args: argparse.Namespace, attempts: List[Dict[str,
     """
     final = attempts[-1]
     model_id = args.candidate_dir.resolve().name
+    board_id = BOARDS[args.board].board_id
     lines: List[str] = [
-        "# CREST Nano RP2040 Connect latency/memory result",
+        f"# CREST {board_id} latency/memory result",
         f"# generated_utc: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
-        f"# board: {BOARD_ID}  model: {model_id}  port: {args.port}",
+        f"# board: {board_id}  model: {model_id}  port: {args.port}",
         f"# timed_runs: {args.runs}  warmup_runs: {args.warmup}  preprocess_on_device: no (preprocess_us=-1)",
         "#",
         "# arena sweep:",
@@ -281,6 +292,10 @@ def write_results(path: Path, args: argparse.Namespace, attempts: List[Dict[str,
                 f"min_invoke_us={min(invoke)} max_invoke_us={max(invoke)} "
                 f"mean_invoke_us={statistics.fmean(invoke):.1f}",
                 f"#   crest_timer_output_s={final.get('latency_s')}",
+                *(
+                    ["#   " + " ".join(f"{key}={value}" for key, value in final["env"].items())]
+                    if final.get("env") else []
+                ),
                 "#   p95 uses the nearest-rank method.",
                 "#",
                 "# raw per-run lines:",
@@ -320,10 +335,10 @@ def main() -> int:
         ``1`` otherwise.
     """
     args = parse_args()
-    device = ArduinoNanoRP2040Device(
-        serial_port=args.port,
-        device_options={"warmup_runs": args.warmup, "upload_retries": args.upload_retries},
-    )
+    options = {"warmup_runs": args.warmup, "upload_retries": args.upload_retries}
+    if args.board == "xiao_esp32s3":
+        options["arena_memory"] = args.arena_memory
+    device = make_device(args.board, serial_port=args.port, device_options=options)
     if str(args.arena_kb).strip().lower() == "auto":
         arena_sweep: List[int] = [int(value) for value in device.spec.arena_sizes_kb]
     else:

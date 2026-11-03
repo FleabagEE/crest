@@ -28,10 +28,13 @@ if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
 from crest.microcontrollers.arduino_nano_rp2040 import (  # noqa: E402
-    ArduinoNanoRP2040Device,
     run_upload_once,
     wait_for_serial_port,
 )
+
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+from bench_boards import BOARDS, make_device  # noqa: E402
 
 DEFAULT_RESULTS_DIR = SCRIPT_DIR / "results"
 
@@ -56,6 +59,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-size", type=int, default=201)
     parser.add_argument("--num-channels", type=int, default=64)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--board", choices=sorted(BOARDS), default="rp2040")
     return parser.parse_args()
 
 
@@ -69,7 +73,8 @@ def main() -> int:
     """
     args = parse_args()
     sketch_path = args.candidate_dir.resolve()
-    device = ArduinoNanoRP2040Device(
+    device = make_device(
+        args.board,
         serial_port=args.port,
         device_options={
             "upload_timeout_s": args.timeout_s,
@@ -93,7 +98,8 @@ def main() -> int:
     output = args.output
     if output is None:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output = DEFAULT_RESULTS_DIR / f"upload_stress_{args.mode}_{stamp}.tsv"
+        prefix = "" if args.board == "rp2040" else f"{args.board}_"
+        output = DEFAULT_RESULTS_DIR / f"{prefix}upload_stress_{args.mode}_{stamp}.tsv"
     output.parent.mkdir(parents=True, exist_ok=True)
 
     rows: List[str] = ["iteration\tmode\tsuccess\tattempts\tduration_s\tport_back\tport_present_before\tlog_tail"]
@@ -107,6 +113,8 @@ def main() -> int:
                 build_dir=compile_result.build_dir,
                 serial_port=args.port,
                 timeout_s=args.timeout_s,
+                fqbn=device.spec.fqbn,
+                board_options=device._board_options,
             )
             port_back = wait_for_serial_port(args.port, args.port_wait_s) if result.success else Path(args.port).exists()
             attempts = 1
