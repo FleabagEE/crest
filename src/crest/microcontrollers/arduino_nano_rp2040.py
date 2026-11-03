@@ -357,6 +357,58 @@ def touch_1200bps(serial_port: str) -> bool:
     return True
 
 
+def kill_session(sid: int) -> None:
+    """SIGKILL every process in session ``sid``.
+
+    Upload tools can start their own process groups (the esp32 core's
+    ``flasher.py`` runs esptool in a new group), so killing the process group
+    of the ``start_new_session`` child is not enough; the session id is
+    inherited by all of them.
+
+    Parameters
+    ----------
+    sid : int
+        Session id (the pid of the ``start_new_session=True`` child).
+    """
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(f"/proc/{entry}/stat", "rb") as handle:
+                stat = handle.read().decode(errors="replace")
+        except OSError:
+            continue
+        # Fields after the parenthesized command: state ppid pgrp session ...
+        fields = stat.rsplit(")", 1)[-1].split()
+        if len(fields) > 3 and fields[3].isdigit() and int(fields[3]) == sid:
+            try:
+                os.kill(int(entry), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
+def communicate_with_timeout(proc: subprocess.Popen, timeout_s: float) -> tuple:
+    """``proc.communicate`` with a hard timeout that kills the whole session.
+
+    Returns ``(stdout, stderr, timed_out)``. If a killed child is stuck in
+    uninterruptible I/O and keeps the pipes open, the output is dropped
+    instead of blocking forever.
+    """
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_s)
+        return stdout, stderr, False
+    except subprocess.TimeoutExpired:
+        kill_session(proc.pid)
+        try:
+            stdout, stderr = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
+            stdout, stderr = "", "(output unavailable: a killed child is stuck in uninterruptible I/O)"
+        return stdout, stderr, True
+
+
 def run_upload_once(
     *,
     sketch_path: Path,
@@ -364,6 +416,7 @@ def run_upload_once(
     serial_port: str,
     timeout_s: float,
     fqbn: str = BOARD_FQBN,
+    board_options: Optional[Mapping[str, str]] = None,
 ) -> UploadResult:
     """Run one ``arduino-cli upload`` with a hard timeout.
 
@@ -376,10 +429,13 @@ def run_upload_once(
     serial_port : str
         Application-mode CDC port.
     timeout_s : float
-        Wall-clock limit. On expiry the whole process group (arduino-cli and
-        the ``picotool`` child it spawns) is killed.
+        Wall-clock limit. On expiry every process in the upload's session
+        (arduino-cli and the uploader it spawns: picotool, flasher.py/esptool)
+        is killed.
     fqbn : str, optional
         Board FQBN.
+    board_options : Mapping[str, str] | None, optional
+        Arduino CLI ``--board-options`` (must match the compile's options).
 
     Returns
     -------
@@ -399,6 +455,9 @@ def run_upload_once(
         str(build_dir),
         str(sketch_path),
     ]
+    board_options_text = arduino_base._format_board_options(board_options)
+    if board_options_text:
+        upload_cmd.extend(["--board-options", board_options_text])
     proc = subprocess.Popen(
         upload_cmd,
         stdout=subprocess.PIPE,
@@ -406,14 +465,8 @@ def run_upload_once(
         text=True,
         start_new_session=True,
     )
-    try:
-        stdout, stderr = proc.communicate(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        stdout, stderr = proc.communicate()
+    stdout, stderr, timed_out = communicate_with_timeout(proc, timeout_s)
+    if timed_out:
         log = (
             f"{stdout}\n{stderr}\nUpload timed out after {timeout_s:.0f} s; the board probably "
             "did not re-enter the RP2040 USB bootloader (or, under WSL, the bootloader "
