@@ -112,6 +112,37 @@
 #define CREST_HOLD_NINA_RESET 0
 #endif
 
+// Power-measurement mode (replaces the latency bench; never returns):
+//   0 = off (latency bench, default)
+//   1 = continuous inference: back-to-back Invoke() during every hold
+//   2 = listening idle: CPU idle (delay(), i.e. RTOS idle / WFI / WAITI), no
+//       inference, as P_listen in the energy model (no microphone yet)
+// After CREST_POWER_SETTLE_S, holds of CREST_POWER_HOLD_S repeat forever so a
+// USB meter can be read several times. Each hold starts with one LED blink
+// and a POWER_STATE_BEGIN line, and ends with a POWER_STATE_END line and two
+// blinks. The LED is off during the hold so it does not add to the reading.
+// No host handshake is needed.
+#ifndef CREST_POWER_STATE
+#define CREST_POWER_STATE 0
+#endif
+#ifndef CREST_POWER_HOLD_S
+#define CREST_POWER_HOLD_S 60
+#endif
+#ifndef CREST_POWER_SETTLE_S
+#define CREST_POWER_SETTLE_S 10
+#endif
+#if CREST_POWER_STATE < 0 || CREST_POWER_STATE > 2
+#error "CREST_POWER_STATE must be 0, 1 or 2"
+#endif
+#if defined(ARDUINO_XIAO_ESP32S3)
+// The XIAO ESP32-S3 user LED (GPIO21) is active-low.
+#define CREST_LED_ON LOW
+#define CREST_LED_OFF HIGH
+#else
+#define CREST_LED_ON HIGH
+#define CREST_LED_OFF LOW
+#endif
+
 #ifndef CREST_SKIP_SERIAL_WAIT
 #define CREST_SKIP_SERIAL_WAIT 0
 #endif
@@ -224,6 +255,79 @@ bool FillInputTensor() {
   return true;
 }
 
+#if CREST_POWER_STATE
+void PowerMarkerBlink(int count) {
+  for (int i = 0; i < count; ++i) {
+    digitalWrite(LED_BUILTIN, CREST_LED_ON);
+    delay(100);
+    digitalWrite(LED_BUILTIN, CREST_LED_OFF);
+    delay(150);
+  }
+}
+
+void PrintPowerState(const char* tag, uint32_t cycle) {
+  Serial.print(tag);
+  Serial.print(" board=");
+  Serial.print(CREST_BOARD_ID);
+  Serial.print(" cycle=");
+  Serial.print(cycle);
+  Serial.print(" state=");
+  Serial.print(CREST_POWER_STATE == 1 ? "inference" : "listen_idle");
+  Serial.print(" model=");
+  Serial.print(CREST_MODEL_ID);
+  Serial.print(" hold_s=");
+  Serial.print(CREST_POWER_HOLD_S);
+  Serial.print(" nina_reset=");
+  Serial.print(CREST_HOLD_NINA_RESET);
+#if defined(ARDUINO_ARCH_ESP32)
+  Serial.print(" cpu_mhz=");
+  Serial.print(getCpuFrequencyMhz());
+  Serial.print(" wifi_mode=");
+  Serial.print(static_cast<int>(WiFi.getMode()));
+  Serial.print(" bt_started=");
+  Serial.print(btStarted() ? 1 : 0);
+#endif
+  Serial.print(" t_ms=");
+  Serial.print(millis());
+}
+
+void RunPowerStateForever() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, CREST_LED_OFF);
+  delay(static_cast<uint32_t>(CREST_POWER_SETTLE_S) * 1000UL);
+  const uint32_t hold_ms = static_cast<uint32_t>(CREST_POWER_HOLD_S) * 1000UL;
+  for (uint32_t cycle = 1;; ++cycle) {
+    PowerMarkerBlink(1);
+    PrintPowerState("POWER_STATE_BEGIN", cycle);
+    Serial.println();
+    Serial.flush();
+    const uint32_t start_ms = millis();
+    uint32_t invokes = 0;
+    while (millis() - start_ms < hold_ms) {
+#if CREST_POWER_STATE == 1
+      interpreter->Invoke();
+      ++invokes;
+#else
+      delay(1000);
+#endif
+    }
+    const uint32_t elapsed_ms = millis() - start_ms;
+    PrintPowerState("POWER_STATE_END", cycle);
+    Serial.print(" elapsed_ms=");
+    Serial.print(elapsed_ms);
+    Serial.print(" invokes=");
+    Serial.print(invokes);
+    if (invokes > 0) {
+      Serial.print(" mean_invoke_us=");
+      Serial.print(static_cast<unsigned long>(static_cast<uint64_t>(elapsed_ms) * 1000ULL / invokes));
+    }
+    Serial.println();
+    Serial.flush();
+    PowerMarkerBlink(2);
+  }
+}
+#endif
+
 void setup() {
 #if CREST_HOLD_NINA_RESET
 #if !defined(ARDUINO_NANO_RP2040_CONNECT)
@@ -275,10 +379,12 @@ void setup() {
       /*profiler=*/nullptr);
   interpreter = &static_interpreter;
 
+#if !CREST_POWER_STATE
   Serial.println(CREST_DUT_READY);
   while (!WaitForStartCommand(kStartCommandTimeoutMs)) {
     Serial.println(CREST_DUT_READY);
   }
+#endif
 
 #if CREST_ARENA_IN_PSRAM
   if (tensor_arena == nullptr) {
@@ -310,6 +416,10 @@ void setup() {
       ReportInfeasibleAndHalt(0, "warmup_invoke_failed");
     }
   }
+
+#if CREST_POWER_STATE
+  RunPowerStateForever();
+#endif
 
   // Timed window: no serial I/O until every run has finished.
   int runs_completed = 0;

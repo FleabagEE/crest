@@ -66,6 +66,13 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parents[1]
 DEFAULT_POWER = SCRIPT_DIR / "board_power.yaml"
 DEFAULT_PREPROCESSING = SCRIPT_DIR / "preprocessing.yaml"
+DEFAULT_MEASURED = SCRIPT_DIR / "board_power_measured.yaml"
+# Which measured state feeds which power value, per board.
+MEASURED_STATE_MAP = {
+    "rp2040": {"active": "inference_nina_{nina}", "listen": "listen_nina_{nina}"},
+    "esp32s3": {"active": "inference", "listen": "listen"},
+    "rpi4": {"active_1": "active_1t", "active_4": "active_4t", "listen": "idle"},
+}
 DESIGNS = ("inference_only", "streaming", "naive")
 DEFAULT_RP2040_CSV = REPO_ROOT / "analysis_scripts" / "rp2040_latency_bench" / "results" / "rp2040_summary.csv"
 DEFAULT_RPI4_CSV = REPO_ROOT / "analysis_scripts" / "rpi4_latency_bench" / "results" / "rpi4_summary.csv"
@@ -187,6 +194,59 @@ def load_power(path: Path = DEFAULT_POWER) -> Dict[str, BoardPower]:
         sleep = listen if sleep_spec.get("same_as") == "P_listen" else _range(sleep_spec["watts"])
         boards[name] = BoardPower(active=active, listen=listen, sleep=sleep)
     return boards
+
+
+def measured_range(windows: Sequence[dict]) -> Optional[Tuple[float, float]]:
+    """``[min - resolution, max + resolution]`` of measured window means, or ``None``."""
+    if not windows:
+        return None
+    means = [float(w["power_w_mean"]) for w in windows]
+    resolution = max(float(w.get("power_resolution_w", 0.0)) for w in windows)
+    return max(0.0, min(means) - resolution), max(means) + resolution
+
+
+def apply_measured(
+    power: Dict[str, BoardPower],
+    path: Path = DEFAULT_MEASURED,
+) -> Tuple[Dict[str, BoardPower], List[str]]:
+    """Override datasheet values with measured ones where samples exist.
+
+    Returns the merged power table and one provenance line per board/value
+    (``measured (n windows)`` or ``datasheet (no measurement)``). P_sleep is
+    never measured here, so it always stays from board_power.yaml; on the Pi
+    P_sleep follows the measured idle value (no board sleep).
+    """
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    merged: Dict[str, BoardPower] = {}
+    provenance: List[str] = []
+    for name, board in power.items():
+        entry = data.get("boards", {}).get(name, {})
+        states = entry.get("states", {}) or {}
+        mapping = {k: v.format(nina=entry.get("nina_for_selection", "reset")) for k, v in MEASURED_STATE_MAP.get(name, {}).items()}
+        active = dict(board.active)
+        listen, sleep = board.listen, board.sleep
+
+        def pick(value_name: str, current: Tuple[float, float]) -> Tuple[float, float]:
+            state = mapping.get(value_name)
+            windows = states.get(state) or [] if state else []
+            measured = measured_range(windows)
+            provenance.append(f"{name}.{value_name}: " + (f"measured {state} ({len(windows)} windows)" if measured
+                                                          else "datasheet (no measurement)"))
+            return measured or current
+
+        if name == "rpi4":
+            for threads in sorted(active):
+                active[threads] = pick(f"active_{threads}", active[threads])
+            listen = pick("listen", listen)
+            sleep = listen
+        else:
+            for threads in sorted(active):
+                active[threads] = pick("active", active[threads])
+            listen = pick("listen", listen)
+        provenance.append(f"{name}.sleep: " + ("= listen (measured idle)" if name == "rpi4" and listen != board.listen
+                                               else "datasheet (not measured)"))
+        merged[name] = BoardPower(active=active, listen=listen, sleep=sleep)
+    return merged, provenance
 
 
 def _float_or_none(value: str) -> Optional[float]:
@@ -530,6 +590,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--design", nargs="+", choices=DESIGNS, default=["inference_only"],
                         help="Preprocessing accounting (default: inference_only).")
     parser.add_argument("--preprocessing", type=Path, default=DEFAULT_PREPROCESSING)
+    parser.add_argument("--power-source", choices=("datasheet", "measured"), default="datasheet",
+                        help="measured: use board_power_measured.yaml where it has samples, datasheet elsewhere.")
+    parser.add_argument("--measured", type=Path, default=DEFAULT_MEASURED)
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     return parser.parse_args()
 
@@ -538,6 +601,9 @@ def main() -> int:
     """Estimate every spec, write the CSV and the markdown report."""
     args = parse_args()
     power = load_power(args.power)
+    provenance = [f"all: datasheet ({args.power.name})"]
+    if args.power_source == "measured":
+        power, provenance = apply_measured(power, args.measured)
     pairs = load_pairs(args.csv)
     preprocessing = load_preprocessing(args.preprocessing)
     estimates = [
@@ -572,7 +638,8 @@ def main() -> int:
     )
     header = (
         "Accuracy is int8 validation-fold accuracy (fold 9); the held-out test fold is not evaluated.\n"
-        "Low/high use the low/high ends of every power range in board_power.yaml.\n"
+        f"Power source: {args.power_source}. Low/high use the low/high ends of every power range.\n"
+        + "".join(f"- {line}\n" for line in provenance)
     )
     summary = "\n\n".join(sections)
     (args.results_dir / "energy_selection.md").write_text(

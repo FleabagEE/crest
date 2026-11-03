@@ -64,3 +64,101 @@ python analysis_scripts/energy/estimate_energy.py --max-response none 0.2 0.5 1.
 python analysis_scripts/energy/estimate_energy.py --design inference_only streaming naive \
   --max-response none 0.2 0.5 1.0                                                   # with preprocessing
 ```
+
+## Power measurement (INA228 on VBUS, read by the Pi 4)
+
+This replaces the datasheet ranges with board-level measurements. Nothing
+here needs sudo except enabling I2C on the Pi.
+
+### Wiring
+
+```
+laptop USB-C ── laptop-side breakout ── VBUS ─► INA228 VIN+ ─[15 mΩ]─ VIN- ─► VBUS ── Adafruit 5978 ── USB-C→micro-USB ── board
+                                        D+ / D- / GND / CC ─────────────── straight through ──────────────
+INA228 VCC/SDA/SCL/GND ── Pi 4 header pin 1 (3.3 V) / 3 (SDA) / 5 (SCL) / 6 (GND); Pi GND common with breakout GND
+```
+
+- Only VBUS goes through the shunt. D+, D−, GND and the CC line(s) pass
+  straight through, so the board still enumerates, uploads and prints serial.
+  Without CC (or a 5.1 kΩ pull-down from CC to GND on the board side) the
+  laptop won't enable VBUS; USB-C to micro-USB adapters normally include it.
+- The INA228's VBUS sense pin must see the load side (VIN−). Check the
+  breakout's VBUS jumper.
+- Keep the D+/D− jumpers short and together (both boards are USB full speed).
+
+### Enable I2C on the Pi and find the INA228 (run these yourself)
+
+```bash
+ssh rpi4@<pi-host>
+sudo raspi-config nonint do_i2c 0       # or: sudo raspi-config → Interface Options → I2C → Yes
+ls /dev/i2c-1                           # should exist (reboot if it does not)
+groups | grep -w i2c                    # user must be in the i2c group
+sudo apt install i2c-tools              # only if i2cdetect is missing
+i2cdetect -y 1                          # expect "40" (INA228 default; A0/A1 straps give 0x40-0x4F)
+```
+
+The reader checks the chip IDs (manufacturer `0x5449`, device `0x228`)
+before measuring and refuses anything else. It needs only Python 3, with no
+packages.
+
+### Firmware (host)
+
+`prepare_power_firmware.py` builds six variants of the latency sketch with
+the SC_5 1s model and `CREST_POWER_STATE`:
+
+| variant | state |
+|---|---|
+| `rp2040_inference`, `rp2040_inference_nina_reset` | continuous `Invoke()`; NINA free / held in reset |
+| `rp2040_listen`, `rp2040_listen_nina_reset` | CPU idle (`delay()`), no inference; NINA free / in reset |
+| `esp32s3_inference`, `esp32s3_listen` | same states, 240 MHz, Wi-Fi/BT off |
+
+After a 10 s settle, every variant repeats 60 s holds forever. Each hold
+starts with one LED blink and a `POWER_STATE_BEGIN ...` serial line, and ends
+with a `POWER_STATE_END ... invokes=N mean_invoke_us=...` line and two
+blinks. The LED is off during the hold.
+
+```bash
+python analysis_scripts/energy/prepare_power_firmware.py                              # compile all
+python analysis_scripts/energy/prepare_power_firmware.py --upload rp2040_inference_nina_reset --port /dev/ttyACM0
+```
+
+### Procedure (per variant)
+
+1. **Offset check (once per session):** with nothing on the board side, run
+   one 10 s reader window. `amps_mean` should be within a few current LSBs
+   (5.2 µA each) of zero; record the value as a `--note` if it is not.
+2. Flash the variant through the inline setup. Optionally watch the serial
+   port to see `POWER_STATE_BEGIN` (e.g. `python -m serial.tools.miniterm /dev/ttyACM0 115200`).
+3. **Wait** 10 s (firmware settle) plus at least 30 s for temperature, i.e.
+   start the reader with `--wait-s 30` right after the first `POWER_STATE_BEGIN`.
+4. Measure **3 windows of 60 s** (`--windows 3 --seconds 60`):
+   ```bash
+   scp analysis_scripts/energy/ina228_reader.py rpi4@<pi-host>:crest_rpi4/
+   ssh rpi4@<pi-host> 'python3 crest_rpi4/ina228_reader.py --windows 3 --seconds 60 --wait-s 30 --label rp2040_inference_nina_reset' | tee rp2040_inference_nina_reset.txt
+   ```
+5. **Record** per window: bus voltage, mean current (with std, min, max),
+   mean power, sample count and rate, die temperature, shunt value and ADC
+   range (all printed by the reader). Also record the meter details: the
+   INA228 breakout model, shunt (15 mΩ unless the breakout differs), and the
+   resolution, 5.21 µA = about 26 µW at 5 V per LSB (`power_resolution_w`).
+   Note the ambient temperature and which laptop port was used.
+6. Store them:
+   ```bash
+   python analysis_scripts/energy/record_power_measurement.py --board rp2040 --state inference_nina_reset \
+       --from-file rp2040_inference_nina_reset.txt --note "Adafruit INA228, 15 mOhm, laptop USB-C port 1, 23 C"
+   ```
+   States: rp2040 `inference_nina_free`, `listen_nina_free`,
+   `inference_nina_reset`, `listen_nina_reset`; esp32s3 `inference`,
+   `listen`; rpi4 `idle`, `active_1t`, `active_4t` (optional: the Pi can be
+   powered through the same INA228 while reading it).
+7. Rerun the selection from the measured values (datasheet ranges stay in
+   `board_power.yaml` for comparison):
+   ```bash
+   python analysis_scripts/energy/estimate_energy.py --power-source measured \
+     --design inference_only streaming naive --max-response none 0.2 0.5 1.0
+   ```
+   A measured value's range is [min − resolution, max + resolution] of its
+   window means. Values without samples, and P_sleep (no sleep firmware
+   yet), fall back to the datasheet; the report lists the source of every
+   value. `nina_for_selection` in `board_power_measured.yaml` picks which
+   RP2040 NINA state the selection uses.

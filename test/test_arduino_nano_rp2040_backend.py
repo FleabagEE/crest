@@ -183,8 +183,9 @@ class RP2040SketchStagingTests(unittest.TestCase):
         self.assertNotIn("CREST_HARNESS_TRIGGER_PIN", text)
         self.assertNotIn("CREST_HARNESS_ARM_PIN", text)
         # The only GPIO the sketch may drive is NINA_RESETN (opt-in reset hold).
+        # Besides that, only the power-measurement mode's marker LED.
         pin_mode_calls = [line.strip() for line in text.splitlines() if "pinMode(" in line]
-        self.assertEqual(pin_mode_calls, ["pinMode(NINA_RESETN, OUTPUT);"])
+        self.assertEqual(sorted(pin_mode_calls), ["pinMode(LED_BUILTIN, OUTPUT);", "pinMode(NINA_RESETN, OUTPUT);"])
         self.assertIn("arena_used_bytes()", text)
         self.assertIn("#define CREST_HOLD_NINA_RESET 0", text)
         self.assertIn("digitalWrite(NINA_RESETN, LOW);", text)

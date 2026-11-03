@@ -1,0 +1,45 @@
+# Copyright (c) 2026 UCLA Networked & Embedded Systems Laboratory
+# SPDX-License-Identifier: BSD-3-Clause
+#
+# MEASURED board power (W), the "measured" source for estimate_energy.py
+# (--power-source measured). The datasheet ranges in board_power.yaml stay as
+# the comparison. Fill it with record_power_measurement.py from
+# ina228_reader.py summary lines; don't edit samples by hand.
+#
+# Each state holds a list of windows (repeats). With samples present, the
+# estimator uses [min - resolution, max + resolution] of the window means as
+# that value's range; states without samples fall back to board_power.yaml
+# (reported per board/state in the output).
+#
+# Firmware for every state: prepare_power_firmware.py (SC_5 1s model,
+# CREST_POWER_STATE). P_sleep is not measured yet (no sleep firmware), so it
+# always comes from board_power.yaml.
+
+schema_version: 1
+instrument:
+  meter: "INA228 (VBUS only) read by Raspberry Pi 4 over I2C"
+  breakouts: "Adafruit 5978 USB-C plug breakout + laptop-side breakout, USB-C to micro-USB adapters"
+  shunt_ohms: 0.015
+  adc_range: "+-40.96 mV"
+
+boards:
+  rp2040:
+    # Which NINA state the deployment uses (sets P_active/P_listen); the other
+    # pair is kept for comparison.
+    nina_for_selection: reset
+    states:
+      inference_nina_free: []
+      listen_nina_free: []
+      inference_nina_reset: []
+      listen_nina_reset: []
+  esp32s3:
+    states:
+      inference: []
+      listen: []
+  rpi4:
+    # Optional: the Pi can also be measured through the same INA228 (VBUS on
+    # its USB-C input) while it reads the INA228 itself.
+    states:
+      idle: []
+      active_1t: []
+      active_4t: []
