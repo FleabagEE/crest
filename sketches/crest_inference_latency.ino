@@ -115,8 +115,14 @@
 // Power-measurement mode (replaces the latency bench; never returns):
 //   0 = off (latency bench, default)
 //   1 = continuous inference: back-to-back Invoke() during every hold
-//   2 = listening idle: CPU idle (delay(), i.e. RTOS idle / WFI / WAITI), no
-//       inference, as P_listen in the energy model (no microphone yet)
+//   2 = listening (P_listen in the energy model): the on-board microphone
+//       captures 16 kHz mono PCM into a buffer, the CPU is otherwise idle,
+//       no inference. RP2040: MP34DT06J via the PDM library (PIO/DMA capture,
+//       PDM->PCM filter in its interrupt handler). ESP32-S3 Sense: the
+//       expansion board's PDM mic via ESP_I2S PDM RX (clock GPIO42, data
+//       GPIO41; hardware PDM->PCM, the CPU blocks on DMA).
+//   3 = idle with the microphone off: CPU idle (delay(), i.e. RTOS idle /
+//       WFI / WAITI), for the cost of the microphone itself (2 minus 3)
 // After CREST_POWER_SETTLE_S, holds of CREST_POWER_HOLD_S repeat forever so a
 // USB meter can be read several times. Each hold starts with one LED blink
 // and a POWER_STATE_BEGIN line, and ends with a POWER_STATE_END line and two
@@ -131,8 +137,18 @@
 #ifndef CREST_POWER_SETTLE_S
 #define CREST_POWER_SETTLE_S 10
 #endif
-#if CREST_POWER_STATE < 0 || CREST_POWER_STATE > 2
-#error "CREST_POWER_STATE must be 0, 1 or 2"
+#if CREST_POWER_STATE < 0 || CREST_POWER_STATE > 3
+#error "CREST_POWER_STATE must be 0, 1, 2 or 3"
+#endif
+#if CREST_POWER_STATE == 2
+#if defined(ARDUINO_ARCH_ESP32)
+#include <ESP_I2S.h>
+#define CREST_MIC_PDM_CLK_PIN 42
+#define CREST_MIC_PDM_DATA_PIN 41
+#else
+#include <PDM.h>
+#endif
+#define CREST_MIC_SAMPLE_RATE 16000
 #endif
 #if defined(ARDUINO_XIAO_ESP32S3)
 // The XIAO ESP32-S3 user LED (GPIO21) is active-low.
@@ -255,6 +271,56 @@ bool FillInputTensor() {
   return true;
 }
 
+#if CREST_POWER_STATE == 2
+// Microphone capture for the listening state. Samples are counted (and the
+// last buffer's peak kept) so the END line shows the mic really ran.
+int16_t g_mic_buffer[512];
+volatile uint32_t g_mic_samples = 0;
+volatile int32_t g_mic_peak = 0;
+
+void TrackMicBuffer(int samples) {
+  int32_t peak = 0;
+  for (int i = 0; i < samples; ++i) {
+    const int32_t v = g_mic_buffer[i] < 0 ? -static_cast<int32_t>(g_mic_buffer[i]) : g_mic_buffer[i];
+    if (v > peak) peak = v;
+  }
+  g_mic_peak = peak;
+  g_mic_samples += samples;
+}
+
+#if defined(ARDUINO_ARCH_ESP32)
+I2SClass g_crest_mic_i2s;
+
+bool StartMic() {
+  g_crest_mic_i2s.setPinsPdmRx(CREST_MIC_PDM_CLK_PIN, CREST_MIC_PDM_DATA_PIN);
+  return g_crest_mic_i2s.begin(I2S_MODE_PDM_RX, CREST_MIC_SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO);
+}
+
+// Blocks on the I2S DMA (CPU idle) for about 32 ms per call.
+void CaptureMic() {
+  const size_t bytes = g_crest_mic_i2s.readBytes(reinterpret_cast<char*>(g_mic_buffer), sizeof(g_mic_buffer));
+  TrackMicBuffer(static_cast<int>(bytes / sizeof(int16_t)));
+}
+#else
+void OnPdmData() {
+  int bytes = PDM.available();
+  if (bytes > static_cast<int>(sizeof(g_mic_buffer))) bytes = sizeof(g_mic_buffer);
+  PDM.read(g_mic_buffer, bytes);
+  TrackMicBuffer(bytes / static_cast<int>(sizeof(int16_t)));
+}
+
+bool StartMic() {
+  PDM.onReceive(OnPdmData);
+  return PDM.begin(1, CREST_MIC_SAMPLE_RATE) != 0;
+}
+
+// The PDM interrupt fills the buffer; the CPU sleeps in delay().
+void CaptureMic() {
+  delay(100);
+}
+#endif
+#endif
+
 #if CREST_POWER_STATE
 void PowerMarkerBlink(int count) {
   for (int i = 0; i < count; ++i) {
@@ -272,7 +338,7 @@ void PrintPowerState(const char* tag, uint32_t cycle) {
   Serial.print(" cycle=");
   Serial.print(cycle);
   Serial.print(" state=");
-  Serial.print(CREST_POWER_STATE == 1 ? "inference" : "listen_idle");
+  Serial.print(CREST_POWER_STATE == 1 ? "inference" : (CREST_POWER_STATE == 2 ? "listen_mic_on" : "idle_mic_off"));
   Serial.print(" model=");
   Serial.print(CREST_MODEL_ID);
   Serial.print(" hold_s=");
@@ -294,6 +360,15 @@ void PrintPowerState(const char* tag, uint32_t cycle) {
 void RunPowerStateForever() {
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, CREST_LED_OFF);
+#if CREST_POWER_STATE == 2
+  if (!StartMic()) {
+    while (true) {
+      Serial.println("POWER_STATE_ERROR mic_start_failed");
+      PowerMarkerBlink(5);
+      delay(1000);
+    }
+  }
+#endif
   delay(static_cast<uint32_t>(CREST_POWER_SETTLE_S) * 1000UL);
   const uint32_t hold_ms = static_cast<uint32_t>(CREST_POWER_HOLD_S) * 1000UL;
   for (uint32_t cycle = 1;; ++cycle) {
@@ -303,10 +378,15 @@ void RunPowerStateForever() {
     Serial.flush();
     const uint32_t start_ms = millis();
     uint32_t invokes = 0;
+#if CREST_POWER_STATE == 2
+    const uint32_t mic_start = g_mic_samples;
+#endif
     while (millis() - start_ms < hold_ms) {
 #if CREST_POWER_STATE == 1
       interpreter->Invoke();
       ++invokes;
+#elif CREST_POWER_STATE == 2
+      CaptureMic();
 #else
       delay(1000);
 #endif
@@ -321,6 +401,15 @@ void RunPowerStateForever() {
       Serial.print(" mean_invoke_us=");
       Serial.print(static_cast<unsigned long>(static_cast<uint64_t>(elapsed_ms) * 1000ULL / invokes));
     }
+#if CREST_POWER_STATE == 2
+    // Expect about CREST_MIC_SAMPLE_RATE * elapsed_ms / 1000 samples.
+    Serial.print(" mic_samples=");
+    Serial.print(g_mic_samples - mic_start);
+    Serial.print(" mic_rate_hz=");
+    Serial.print(static_cast<unsigned long>(static_cast<uint64_t>(g_mic_samples - mic_start) * 1000ULL / elapsed_ms));
+    Serial.print(" mic_peak=");
+    Serial.print(g_mic_peak);
+#endif
     Serial.println();
     Serial.flush();
     PowerMarkerBlink(2);

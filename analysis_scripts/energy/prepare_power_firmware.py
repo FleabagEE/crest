@@ -5,14 +5,20 @@
 Every variant is the staged latency sketch with ``CREST_POWER_STATE`` set
 (see ``sketches/crest_inference_latency.ino``), running the SC_5 1s model:
 
-| variant                         | board        | state        | NINA       |
-|---------------------------------|--------------|--------------|------------|
-| rp2040_inference                | RP2040       | inference    | free       |
-| rp2040_listen                   | RP2040       | listen idle  | free       |
-| rp2040_inference_nina_reset     | RP2040       | inference    | in reset   |
-| rp2040_listen_nina_reset        | RP2040       | listen idle  | in reset   |
-| esp32s3_inference               | ESP32-S3     | inference    | -          |
-| esp32s3_listen                  | ESP32-S3     | listen idle  | -          |
+| variant                         | board    | state                         | NINA     |
+|---------------------------------|----------|-------------------------------|----------|
+| rp2040_inference                | RP2040   | continuous inference          | free     |
+| rp2040_listen                   | RP2040   | listening: mic on, CPU idle   | free     |
+| rp2040_idle_mic_off             | RP2040   | CPU idle, mic off             | free     |
+| rp2040_inference_nina_reset     | RP2040   | continuous inference          | in reset |
+| rp2040_listen_nina_reset        | RP2040   | listening: mic on, CPU idle   | in reset |
+| rp2040_idle_mic_off_nina_reset  | RP2040   | CPU idle, mic off             | in reset |
+| esp32s3_inference               | ESP32-S3 | continuous inference          | -        |
+| esp32s3_listen                  | ESP32-S3 | listening: mic on, CPU idle   | -        |
+| esp32s3_idle_mic_off            | ESP32-S3 | CPU idle, mic off             | -        |
+
+"listen" is P_listen in the energy model; listen minus idle_mic_off is the
+microphone's own cost.
 
 The ESP32-S3 variants run at 240 MHz with Wi-Fi and Bluetooth off (the
 backend's board options and the sketch's ESP32 setup).
@@ -46,14 +52,17 @@ OUT_DIR = SCRIPT_DIR / "results" / "power_firmware"
 WINDOW, CHANNELS = 98, 64
 # Arena sizes that worked for SC_5 1s in the latency bench (memory.md 9, 14).
 ARENA_KB = {"rp2040": 46, "xiao_esp32s3": 51}
-STATE_IDS = {"inference": 1, "listen": 2}
+STATE_IDS = {"inference": 1, "listen": 2, "idle_mic_off": 3}
 VARIANTS: Dict[str, Dict[str, Any]] = {
     "rp2040_inference": {"board": "rp2040", "state": "inference", "options": {}},
     "rp2040_listen": {"board": "rp2040", "state": "listen", "options": {}},
     "rp2040_inference_nina_reset": {"board": "rp2040", "state": "inference", "options": {"hold_nina_reset": True}},
     "rp2040_listen_nina_reset": {"board": "rp2040", "state": "listen", "options": {"hold_nina_reset": True}},
+    "rp2040_idle_mic_off": {"board": "rp2040", "state": "idle_mic_off", "options": {}},
+    "rp2040_idle_mic_off_nina_reset": {"board": "rp2040", "state": "idle_mic_off", "options": {"hold_nina_reset": True}},
     "esp32s3_inference": {"board": "xiao_esp32s3", "state": "inference", "options": {"cpu_mhz": 240}},
     "esp32s3_listen": {"board": "xiao_esp32s3", "state": "listen", "options": {"cpu_mhz": 240}},
+    "esp32s3_idle_mic_off": {"board": "xiao_esp32s3", "state": "idle_mic_off", "options": {"cpu_mhz": 240}},
 }
 
 

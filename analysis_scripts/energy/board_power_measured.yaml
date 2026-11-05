@@ -6,6 +6,10 @@
 # the comparison. Fill it with record_power_measurement.py from
 # ina228_reader.py summary lines; don't edit samples by hand.
 #
+# "listen" states are P_listen (microphone capturing, CPU idle); the
+# idle_mic_off states are kept for comparison and are not used by the
+# selection.
+#
 # Each state holds a list of windows (repeats). With samples present, the
 # estimator uses [min - resolution, max + resolution] of the window means as
 # that value's range; states without samples fall back to board_power.yaml
@@ -32,10 +36,14 @@ boards:
       listen_nina_free: []
       inference_nina_reset: []
       listen_nina_reset: []
+      # Mic off, CPU idle: for the microphone's own cost (listen minus this).
+      idle_mic_off_nina_free: []
+      idle_mic_off_nina_reset: []
   esp32s3:
     states:
       inference: []
       listen: []
+      idle_mic_off: []
   rpi4:
     # Optional: the Pi can also be measured through the same INA228 (VBUS on
     # its USB-C input) while it reads the INA228 itself.

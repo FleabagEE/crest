@@ -103,14 +103,19 @@ packages.
 
 ### Firmware (host)
 
-`prepare_power_firmware.py` builds six variants of the latency sketch with
+`prepare_power_firmware.py` builds nine variants of the latency sketch with
 the SC_5 1s model and `CREST_POWER_STATE`:
 
-| variant | state |
+| variant | state (`CREST_POWER_STATE`) |
 |---|---|
-| `rp2040_inference`, `rp2040_inference_nina_reset` | continuous `Invoke()`; NINA free / held in reset |
-| `rp2040_listen`, `rp2040_listen_nina_reset` | CPU idle (`delay()`), no inference; NINA free / in reset |
-| `esp32s3_inference`, `esp32s3_listen` | same states, 240 MHz, Wi-Fi/BT off |
+| `rp2040_inference`, `rp2040_inference_nina_reset` | 1: continuous `Invoke()`; NINA free / held in reset |
+| `rp2040_listen`, `rp2040_listen_nina_reset` | 2: **listening = P_listen**: MP34DT06J PDM mic capturing 16 kHz mono (PDM library, PIO/DMA), CPU otherwise idle, no inference |
+| `rp2040_idle_mic_off`, `rp2040_idle_mic_off_nina_reset` | 3: CPU idle (`delay()`), mic off |
+| `esp32s3_inference`, `esp32s3_listen`, `esp32s3_idle_mic_off` | the same three states at 240 MHz, Wi-Fi/BT off; the listening state uses the Sense board's PDM mic via `ESP_I2S` PDM RX (GPIO42 clock, GPIO41 data, hardware PDM->PCM) |
+
+The microphone's own cost is `listen` minus `idle_mic_off`. In the listening
+state the END line also reports `mic_samples` (about 16,000 per second
+expected), `mic_rate_hz` and `mic_peak`, so you can confirm the mic ran.
 
 After a 10 s settle, every variant repeats 60 s holds forever. Each hold
 starts with one LED blink and a `POWER_STATE_BEGIN ...` serial line, and ends
@@ -148,8 +153,10 @@ python analysis_scripts/energy/prepare_power_firmware.py --upload rp2040_inferen
        --from-file rp2040_inference_nina_reset.txt --note "Adafruit INA228, 15 mOhm, laptop USB-C port 1, 23 C"
    ```
    States: rp2040 `inference_nina_free`, `listen_nina_free`,
-   `inference_nina_reset`, `listen_nina_reset`; esp32s3 `inference`,
-   `listen`; rpi4 `idle`, `active_1t`, `active_4t` (optional: the Pi can be
+   `idle_mic_off_nina_free`, `inference_nina_reset`, `listen_nina_reset`,
+   `idle_mic_off_nina_reset`; esp32s3 `inference`, `listen`, `idle_mic_off`
+   (the selection uses `inference` as P_active and `listen` as P_listen;
+   `idle_mic_off` is for comparison); rpi4 `idle`, `active_1t`, `active_4t` (optional: the Pi can be
    powered through the same INA228 while reading it).
 7. Rerun the selection from the measured values (datasheet ranges stay in
    `board_power.yaml` for comparison):
