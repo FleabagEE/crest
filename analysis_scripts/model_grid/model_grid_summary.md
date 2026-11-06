@@ -6,7 +6,7 @@ Latency columns are a TRIAGE ESTIMATE from measured MAC/s of the standard-conv D
 
 ## Operator support
 - Unsupported in a runtime: none.
-- ESP32 latency sketch resolver (`MicroMutableOpResolver<8>`) lacks: ADD, REDUCE_MAX, SOFTMAX -> register them before measuring (runtime has them).
+- ESP32 latency sketch resolver (`MicroMutableOpResolver<11>`) lacks: nothing -> register them before measuring (runtime has them).
 
 ## Classes
 - rp2040_mem: borderline 8, fits 30, no 10

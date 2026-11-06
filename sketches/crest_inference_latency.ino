@@ -450,15 +450,19 @@ void setup() {
   model = tflite::GetModel(g_model);
 
 #if defined(ARDUINO_ARCH_ESP32)
-  // Every op used by the CREST DS-CNN exports (no AllOpsResolver in this TFLM).
-  static tflite::MicroMutableOpResolver<8> resolver;
+  // Every op used by the CREST DS-CNN exports and the course-project model grid
+  // (DS-CNN SC/DW, MobileNetV2Tiny); this TFLM has no AllOpsResolver.
+  static tflite::MicroMutableOpResolver<11> resolver;
+  resolver.AddAdd();
   resolver.AddConv2D();
   resolver.AddDepthwiseConv2D();
   resolver.AddFullyConnected();
   resolver.AddMean();
   resolver.AddPack();
+  resolver.AddReduceMax();
   resolver.AddReshape();
   resolver.AddShape();
+  resolver.AddSoftmax();
   resolver.AddStridedSlice();
 #else
   static tflite::AllOpsResolver resolver;
