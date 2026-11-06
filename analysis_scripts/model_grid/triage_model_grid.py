@@ -23,7 +23,7 @@ CSV row with:
   (optimistic) and the overhead-bound depthwise baseline (pessimistic);
 - a measurement plan (run / skip, timed and warm-up runs, minutes).
 
-It also writes ``model_grid_summary.md`` (counts, op support, memory and
+It also writes ``model_grid_summary.md`` (both next to this script by default) (counts, op support, memory and
 latency classes, plan with per-board time, 128-mel front-end notes).
 
 Run in the ``crest`` env (TF 2.20 for the .tflite parser, librosa for the
@@ -504,7 +504,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--models-root", type=Path, required=True,
                         help="Course repo models/ directory (e.g. a `git archive origin/main models` extract).")
-    parser.add_argument("--out-dir", type=Path, default=SCRIPT_DIR / "results")
+    parser.add_argument("--out-dir", type=Path, default=SCRIPT_DIR,
+                        help="Where the CSV and summary go (default: next to this script, committed).")
+    parser.add_argument("--source-label", default=None,
+                        help="Source description for the summary (default: the --models-root path).")
     parser.add_argument("--litert-python", type=Path, default=None,
                         help="Python with ai-edge-litert installed; loads + invokes every model with XNNPACK.")
     return parser.parse_args()
@@ -533,7 +536,7 @@ def main() -> int:
               f"esp32={row['esp32_mem']}")
     write_csv(rows, args.out_dir / "model_grid_triage.csv")
     write_summary(rows, args.out_dir / "model_grid_summary.md",
-                  {"skipped_windows": skipped, "models_root": args.models_root, "esp_cap": esp_cap})
+                  {"skipped_windows": skipped, "models_root": args.source_label or args.models_root, "esp_cap": esp_cap})
     print(f"csv: {args.out_dir / 'model_grid_triage.csv'}\nsummary: {args.out_dir / 'model_grid_summary.md'}")
     return 0
 

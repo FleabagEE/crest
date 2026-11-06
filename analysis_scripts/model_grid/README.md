@@ -15,14 +15,15 @@ python -m venv --system-site-packages "$SCRATCH/litert_venv"
 "$SCRATCH/litert_venv/bin/pip" install --no-deps ai-edge-litert==2.3.0
 
 LD_LIBRARY_PATH=$CONDA_PREFIX/lib python analysis_scripts/model_grid/triage_model_grid.py \
-    --models-root "$SCRATCH/grid/models" --litert-python "$SCRATCH/litert_venv/bin/python"
+    --models-root "$SCRATCH/grid/models" --litert-python "$SCRATCH/litert_venv/bin/python" \
+    --source-label "embedded-systme-project origin/main c250591, models/"
 ```
 
 `LD_LIBRARY_PATH` is only needed when ROS's old `libstdc++` leaks into the shell
 (librosa/scipy then fail with a `CXXABI_1.3.15` error).
 
-Outputs (gitignored): `results/model_grid_triage.csv` (one row per model) and
-`results/model_grid_summary.md`.
+Outputs (committed, so the triage is reproducible): `model_grid_triage.csv`
+(one row per model) and `model_grid_summary.md`, next to this script.
 
 ## What each column group means
 
