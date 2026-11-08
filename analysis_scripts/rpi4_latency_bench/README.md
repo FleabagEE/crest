@@ -27,6 +27,8 @@ python analysis_scripts/rpi4_latency_bench/run_rpi4_latency_bench.py \
   increase and `flash_bytes` the `.tflite` size, followed by the raw per-run
   lines and the environment (runtime version, threads, CPU governor and
   frequency, temperature, throttle flags).
+- `--skip-done` skips candidates that already have an `ok` results file for
+  the same thread count and XNNPACK mode, so an interrupted run resumes.
 - Use `--threads 4` for all cores, and `--no-xnnpack` to measure the
   reference kernels instead of the XNNPACK delegate.
 - Before any run, the script checks that every core uses the

@@ -60,6 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-xnnpack", action="store_true")
     parser.add_argument("--timeout-s", type=float, default=300.0, help="Limit for one remote run.")
     parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
+    parser.add_argument("--skip-done", action="store_true",
+                        help="Skip candidates with an ok results file for the same threads and XNNPACK mode.")
     parser.add_argument(
         "--require-governor",
         default="performance",
@@ -165,6 +167,17 @@ def check_governors(device: RaspberryPi4Device, required: str) -> Dict[str, Any]
     }
 
 
+def done_result(candidate: Path, args: argparse.Namespace) -> Path | None:
+    """Return the newest ``ok`` results file for this candidate, thread count and XNNPACK mode."""
+    xnnpack = "off" if args.no_xnnpack else "default"
+    pattern = f"{candidate.resolve().name}_{BOARD_ID}_t{args.threads}_*.txt"
+    for path in sorted(args.results_dir.glob(pattern), reverse=True):
+        text = path.read_text(encoding="utf-8")
+        if "#   status=ok " in text and f" xnnpack={xnnpack} " in text:
+            return path
+    return None
+
+
 def bench_one(device: RaspberryPi4Device, candidate: Path, args: argparse.Namespace) -> Dict[str, Any]:
     """Upload and measure one candidate and write its results file."""
     candidate = candidate.resolve()
@@ -254,6 +267,9 @@ def main() -> int:
         return 3
     failures = 0
     for candidate in args.candidates:
+        if args.skip_done and (existing := done_result(candidate, args)):
+            print(f"[{candidate.name}] skipped: already done ({existing.name})", flush=True)
+            continue
         summary = bench_one(device, candidate, args)
         print(summary, flush=True)
         failures += summary["status"] != "ok"
