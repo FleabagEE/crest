@@ -68,3 +68,23 @@ Outputs (committed, so the triage is reproducible): `model_grid_triage.csv`
     (run-to-run spread has been under 0.1%).
   - Minutes come from the earlier bench logs: compile + upload + probe, plus
     one arena retry for uncalibrated graphs and for the ESP32.
+
+## Running the ESP32-S3 part of the plan
+
+[`run_esp32_grid.py`](run_esp32_grid.py) runs every planned ESP32-S3 model
+through `run_rp2040_bench_plan.py --board xiao_esp32s3 --skip-done`, so it
+resumes after an interruption:
+
+```bash
+ARDUINO_CLI_BIN=<arduino-cli wrapper with --jobs 4> \
+  python analysis_scripts/model_grid/run_esp32_grid.py [MODEL ...]
+```
+
+- Runs: the planned timed / warm-up runs from `model_grid_triage.csv`.
+- Arena: starts at max(1.7 x RP2040 estimate, estimate + largest conv filter)
+  + 4 KiB and grows in 32 KiB steps (`--arena-step-kb`). Internal SRAM is
+  capped at 232 KiB, the largest arena that links (233 KiB overflows
+  `dram0_0_seg`), so the ESP32 static-RAM limit is ~283.5 KB in practice,
+  not the 327,680 B the triage assumes.
+- PSRAM: used where the plan says so. A model that fails in internal SRAM is
+  retried with a PSRAM arena starting at 232 KiB.
